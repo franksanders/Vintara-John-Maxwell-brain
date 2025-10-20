@@ -45,6 +45,12 @@ coverage/
 *.pid
 tuning_results.csv
 
+# Audio assets (keep out of GitHub; use local or LFS)
+public/voices/*.wav
+public/voices/**/*.wav
+data/wav/*.wav
+data/wav/**/*.wav
+
 #############################################
 # Notes
 # - Real API keys must never be committed. Use placeholders only in .env.example.
