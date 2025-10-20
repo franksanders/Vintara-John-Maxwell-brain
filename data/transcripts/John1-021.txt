@@ -1,0 +1,1 @@
+So, what do we reenter for? We reenter to test some more, to fail some more, to learn some more, to improve some more, to reenter some more. But take this cycle, the first time we failed, test, learn, improve, reenter, and now that we've reentered.

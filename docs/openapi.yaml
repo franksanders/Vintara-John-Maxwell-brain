@@ -1,0 +1,283 @@
+openapi: 3.0.3
+info:
+  title: Maxwell Coach Brain API
+  version: 0.1.0
+  description: API for chat, retrieval, TTS, and persona-aware coaching.
+servers:
+  - url: http://localhost:3000
+    description: Local dev
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas:
+    ChatMessage:
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant]
+        content:
+          type: string
+      required: [role, content]
+    Profile:
+      type: object
+      properties:
+        userId: { type: string }
+        firstName: { type: string }
+        timezone: { type: string }
+        latitude: { type: number }
+        longitude: { type: number }
+        locale: { type: string }
+        regionName: { type: string }
+        role: { type: string }
+        seniority: { type: string }
+        industry: { type: string }
+        teamSize: { type: number }
+        goals:
+          type: array
+          items: { type: string }
+        currentChallenge: { type: string }
+        tonePref:
+          type: string
+          enum: [direct, empathetic]
+        brevityPref:
+          type: string
+          enum: [short, normal]
+        cadencePref: { type: string }
+        stakeholders:
+          type: array
+          items: { type: string }
+        deadlines:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              date: { type: string, format: date-time }
+            required: [name, date]
+        boundaries:
+          type: array
+          items: { type: string }
+      required: [userId]
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200': { description: OK }
+  /corpus/stats:
+    get:
+      summary: Corpus stats
+      responses:
+        '200': { description: OK }
+  /profile:
+    get:
+      summary: Get profile
+      security: [ { ApiKeyAuth: [] } ]
+      parameters:
+        - in: query
+          name: userId
+          schema: { type: string }
+          required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profile:
+                    $ref: '#/components/schemas/Profile'
+    post:
+      summary: Upsert profile
+      security: [ { ApiKeyAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Profile'
+      responses:
+        '200': { description: OK }
+  /conversation/start:
+    post:
+      summary: Start conversation thread
+      security: [ { ApiKeyAuth: [] } ]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                userId: { type: string }
+                seed:
+                  type: array
+                  items: { $ref: '#/components/schemas/ChatMessage' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  openingMessage: { type: string }
+  /conversation/{id}/send:
+    post:
+      summary: Send message and get assistant reply
+      security: [ { ApiKeyAuth: [] } ]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query: { type: string }
+                topK: { type: integer }
+                temperature: { type: number }
+                maxTokens: { type: integer }
+      responses:
+        '200': { description: OK }
+  /conversation/{id}/stream:
+    post:
+      summary: Stream chat via SSE
+      security: [ { ApiKeyAuth: [] } ]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query: { type: string }
+                topK: { type: integer }
+                temperature: { type: number }
+                maxTokens: { type: integer }
+      responses:
+        '200': { description: text/event-stream }
+  /generate:
+    post:
+      summary: One-off answer generation
+      security: [ { ApiKeyAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query: { type: string }
+                userId: { type: string }
+                topK: { type: integer }
+                temperature: { type: number }
+                maxTokens: { type: integer }
+                history:
+                  type: array
+                  items: { $ref: '#/components/schemas/ChatMessage' }
+      responses:
+        '200': { description: OK }
+  /generate/stream:
+    post:
+      summary: Stream one-off answer via SSE
+      security: [ { ApiKeyAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query: { type: string }
+                userId: { type: string }
+                topK: { type: integer }
+                temperature: { type: number }
+                maxTokens: { type: integer }
+                history:
+                  type: array
+                  items: { $ref: '#/components/schemas/ChatMessage' }
+      responses:
+        '200': { description: text/event-stream }
+  /tts:
+    post:
+      summary: Text-to-speech
+      security: [ { ApiKeyAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text: { type: string }
+                format: { type: string, default: mp3 }
+                parameters: { type: object }
+      responses:
+        '200': { description: audio/* }
+  /generate/voice:
+    post:
+      summary: Generate an answer then return TTS audio
+      security: [ { ApiKeyAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query: { type: string }
+                userId: { type: string }
+                topK: { type: integer }
+                temperature: { type: number }
+                maxTokens: { type: integer }
+                format: { type: string, default: mp3 }
+                parameters: { type: object }
+      responses:
+        '200': { description: audio/* }
+  /memory:
+    get:
+      summary: List memories (debug/dev)
+      security: [ { ApiKeyAuth: [] } ]
+      responses:
+        '200': { description: OK }
+  /feedback:
+    post:
+      summary: Record feedback on helpful chunks
+      security: [ { ApiKeyAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                userId: { type: string }
+                helpful:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      chunkId: { type: string }
+                      categoryIds:
+                        type: array
+                        items: { type: string }
+      responses:
+        '200': { description: OK }
+security:
+  - ApiKeyAuth: []

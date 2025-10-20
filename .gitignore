@@ -1,0 +1,52 @@
+#############################################
+# Build & Dependencies
+#############################################
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+#############################################
+# Environment & Secrets
+#############################################
+.env
+.env.*
+*.env.local
+!.env.example
+
+#############################################
+# Logs & Debug
+#############################################
+logs/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+#############################################
+# OS / Editor / Misc
+#############################################
+.DS_Store
+._*
+.idea/
+.vscode/
+*.swp
+
+#############################################
+# Coverage / Test Artifacts
+#############################################
+coverage/
+.jest/
+
+#############################################
+# Temp / Generated
+#############################################
+.tmp/
+*.pid
+tuning_results.csv
+
+#############################################
+# Notes
+# - Real API keys must never be committed. Use placeholders only in .env.example.
+# - Remove tuning_results.csv from ignore if you want it versioned WITHOUT sensitive data.
+#############################################

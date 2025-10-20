@@ -1,0 +1,330 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Maxwell Coach (PoC)</title>
+  <style>
+    body { font-family: -apple-system, system-ui, Segoe UI, Roboto, sans-serif; margin: 0; padding: 16px; }
+    #log { white-space: pre-wrap; font-size: 14px; }
+    .bubble { border-radius: 14px; padding: 10px 14px; margin: 8px 0; max-width: 90%; }
+    .user { background: #e3f2fd; align-self: flex-end; }
+    .assistant { background: #f1f8e9; }
+    #chat { display: flex; flex-direction: column; }
+    #row { display: flex; gap: 8px; position: fixed; bottom: 12px; left: 12px; right: 12px; z-index: 9999; background: #fff; padding: 8px; border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,0.12); }
+    #q { flex: 1; font-size: 16px; padding: 10px; }
+    #send, #voice { padding: 10px 14px; font-size: 16px; }
+    main { padding-bottom: 80px; }
+    .status { display: inline-block; margin-left: 8px; padding: 2px 8px; border-radius: 999px; font-size: 12px; vertical-align: middle; }
+    .live { background: #e8f5e9; color: #1b5e20; }
+    .offline { background: #ffebee; color: #b71c1c; }
+    .retry-btn { margin-left: 8px; font-size: 12px; padding: 4px 8px; border-radius: 8px; border: 1px solid #ccc; background: #fff; }
+  </style>
+</head>
+<body>
+  <main>
+  <h2>Maxwell Coach (PoC) <span id="status" class="status offline">Offline</span></h2>
+    <div style="margin: 8px 0;">
+      <input id="apiKey" placeholder="API Key" style="width: 60%; padding: 8px;" />
+      <button id="saveKey" style="padding: 8px 12px;">Save Key</button>
+      <small id="keyStatus" style="margin-left:8px; color:#555;"></small>
+      <button id="start" style="margin-left:12px; padding:8px 12px;">Start Chat</button>
+    </div>
+    <div style="margin: 8px 0; display:flex; gap:8px; flex-wrap: wrap; align-items: center;">
+      <input id="userId" placeholder="User ID (any stable string)" style="padding:8px; min-width: 180px;" />
+      <input id="firstName" placeholder="First name" style="padding:8px; min-width: 140px;" />
+      <input id="regionName" placeholder="City, State (optional)" style="padding:8px; min-width: 180px;" />
+      <button id="saveProfile" style="padding:8px 12px;">Save Profile</button>
+      <small id="profileStatus" style="color:#555;"></small>
+    </div>
+    <div style="margin: 6px 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+      <label for="preset" style="font-size: 14px;">Voice preset:</label>
+      <select id="preset" style="padding: 6px 8px;">
+        <option value="v2/en_speaker_6">en_speaker_6 (male)</option>
+        <option value="v2/en_speaker_3">en_speaker_3 (male)</option>
+        <option value="v2/en_speaker_9">en_speaker_9 (male)</option>
+        <option value="v2/en_speaker_1">en_speaker_1 (neutral)</option>
+      </select>
+      <button id="testVoice" style="padding: 6px 10px; font-size: 14px;">Test Voice</button>
+  <input id="speakerWav" placeholder="speaker_wav URL (https://... or /voices/john.wav)" style="flex:1; min-width: 200px; padding:6px 8px;" />
+    </div>
+    <div id="chat"></div>
+  </main>
+  <div id="row">
+    <input id="q" placeholder="Ask something..." />
+    <button id="send">Send</button>
+    <button id="voice">Voice</button>
+  </div>
+  <script>
+  let threadId = null;
+  let lastQueryText = '';
+    const chat = document.getElementById('chat');
+    const q = document.getElementById('q');
+    const sendBtn = document.getElementById('send');
+  const voiceBtn = document.getElementById('voice');
+  const presetSel = document.getElementById('preset');
+  const apiKeyInput = document.getElementById('apiKey');
+  const saveKeyBtn = document.getElementById('saveKey');
+  const startBtn = document.getElementById('start');
+  const statusBadge = document.getElementById('status');
+  const testVoiceBtn = document.getElementById('testVoice');
+  const speakerWavInput = document.getElementById('speakerWav');
+    const keyStatus = document.getElementById('keyStatus');
+  const userIdInput = document.getElementById('userId');
+  const firstNameInput = document.getElementById('firstName');
+  const regionNameInput = document.getElementById('regionName');
+  const saveProfileBtn = document.getElementById('saveProfile');
+  const profileStatus = document.getElementById('profileStatus');
+
+  function getUserId() { return localStorage.getItem('userId') || ''; }
+  function setUserId(v){ localStorage.setItem('userId', v || ''); }
+  function profileMsg(t,c){ profileStatus.textContent=t; profileStatus.style.color=c||'#555'; }
+
+    function getApiKey() { return localStorage.getItem('apiKey') || ''; }
+    function setApiKey(key) { localStorage.setItem('apiKey', key || ''); }
+    function setStatus(text, color) { keyStatus.textContent = text; keyStatus.style.color = color || '#555'; }
+    async function validateKey() {
+      const k = getApiKey();
+      if (!k) { setStatus('No key saved', '#555'); return; }
+      setStatus('Validating…', '#555');
+      try {
+        // Use a protected endpoint with no side effects to validate (GET /memory)
+        const r = await fetch('/memory', { headers: { 'x-api-key': k } });
+        if (r.ok) {
+          setStatus('Key valid', 'green');
+          // Show a welcome hint if no messages yet
+          if (!chat.querySelector('.bubble')) {
+            addBubble('Welcome! Type a question below and tap Send.', 'assistant');
+          }
+        }
+        else setStatus('Invalid key (' + r.status + ')', 'crimson');
+      } catch (e) {
+        setStatus('Validation failed', 'crimson');
+      }
+    }
+    function updateKeyUi() {
+      const k = getApiKey();
+      apiKeyInput.value = k;
+      if (k) validateKey(); else setStatus('No key saved', '#555');
+    }
+    updateKeyUi();
+  // Remember voice preset
+  function getPreset() { return localStorage.getItem('voicePreset') || 'v2/en_speaker_6'; }
+  function setPreset(v) { localStorage.setItem('voicePreset', v); }
+  presetSel.value = getPreset();
+  speakerWavInput.value = localStorage.getItem('speakerWav') || '';
+  speakerWavInput.addEventListener('change', () => localStorage.setItem('speakerWav', speakerWavInput.value.trim()));
+  presetSel.addEventListener('change', () => setPreset(presetSel.value));
+    // Detect voice configuration from server health and disable voice button if unavailable
+    (async function initVoiceAvailability() {
+      try {
+        const r = await fetch('/health');
+        const j = await r.json();
+        if (!j.voiceConfigured) {
+          voiceBtn.disabled = true;
+          voiceBtn.title = 'Voice not configured';
+        }
+      } catch {}
+    })();
+    saveKeyBtn.onclick = async () => { setApiKey(apiKeyInput.value.trim()); await validateKey(); };
+    apiKeyInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveKeyBtn.click(); });
+
+    function addBubble(text, role, opts) {
+      const div = document.createElement('div');
+      div.className = 'bubble ' + role;
+      div.textContent = text;
+      if (role === 'assistant' && opts && opts.offline) {
+        const btn = document.createElement('button');
+        btn.className = 'retry-btn';
+        btn.textContent = 'Retry';
+        btn.onclick = retryLast;
+        div.appendChild(btn);
+      }
+      chat.appendChild(div);
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+
+    async function ensureThread() {
+      if (threadId) return threadId;
+      const r = await fetch('/conversation/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': getApiKey() },
+        body: JSON.stringify({ userId: getUserId() || undefined })
+      });
+      const j = await r.json();
+      threadId = j.id;
+      if (j.openingMessage) {
+        addBubble(j.openingMessage, 'assistant');
+      }
+      return threadId;
+    }
+
+    function setLive(isLive) {
+      statusBadge.textContent = isLive ? 'Live' : 'Offline';
+      statusBadge.classList.toggle('live', isLive);
+      statusBadge.classList.toggle('offline', !isLive);
+    }
+
+    async function send() {
+      const text = q.value.trim(); if (!text) return;
+      q.value = '';
+      addBubble(text, 'user');
+      lastQueryText = text;
+      await ensureThread();
+      const r = await fetch(`/conversation/${threadId}/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': getApiKey() },
+        body: JSON.stringify({ query: text, temperature: 0.8 })
+      });
+      const j = await r.json();
+      if (j.userId && !getUserId()) setUserId(j.userId);
+      addBubble(j.answer || '[no answer]', 'assistant', { offline: !j.model || j.model === 'stub-local' });
+      setLive(j.model && j.model !== 'stub-local');
+    }
+
+    async function retryLast() {
+      if (!lastQueryText) { return; }
+      await ensureThread();
+      const r = await fetch(`/conversation/${threadId}/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': getApiKey() },
+        body: JSON.stringify({ query: lastQueryText, temperature: 0.8 })
+      });
+      const j = await r.json();
+      if (j.userId && !getUserId()) setUserId(j.userId);
+      addBubble(j.answer || '[no answer]', 'assistant', { offline: !j.model || j.model === 'stub-local' });
+      setLive(j.model && j.model !== 'stub-local');
+    }
+
+    function setVoiceBusy(busy) {
+      voiceBtn.disabled = busy || voiceBtn.disabled; // keep disabled if config disabled
+      voiceBtn.textContent = busy ? 'Voice…' : 'Voice';
+    }
+
+    async function playBlob(blob) {
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio();
+      audio.src = url;
+      try {
+        await audio.play();
+      } catch (e) {
+        alert('Playback failed. Check your device volume and silent switch.');
+        console.error('audio.play failed', e);
+      }
+    }
+
+    async function testVoice() {
+      if (voiceBtn.disabled) { alert('Voice not configured. Ask your admin to set HUGGINGFACE_API_TOKEN and HF_TTS_MODEL.'); return; }
+      setVoiceBusy(true);
+      try {
+        // For Parler-TTS we rely on server-side prompt from env; for Bark we pass voice_preset
+        const params = {};
+        const r = await fetch('/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': getApiKey() },
+          body: JSON.stringify({ text: 'Testing voice preset.', format: 'wav', parameters: buildTtsParams(params) })
+        });
+        if (!r.ok) {
+          try { const e = await r.json(); alert(e?.error?.message || 'Voice test failed'); }
+          catch { alert('Voice test failed'); }
+          return;
+        }
+        const blob = await r.blob();
+        await playBlob(blob);
+      } finally {
+        setVoiceBusy(false);
+      }
+    }
+
+    async function voice() {
+      if (voiceBtn.disabled) { alert('Voice not configured. Ask your admin to set HUGGINGFACE_API_TOKEN and HF_TTS_MODEL.'); return; }
+      const text = q.value.trim(); if (!text) return;
+      q.value = '';
+      addBubble(text, 'user');
+      setVoiceBusy(true);
+      try {
+        const params = {};
+        const r = await fetch('/generate/voice', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': getApiKey() },
+          body: JSON.stringify({ query: text, userId: getUserId() || undefined, temperature: 0.8, format: 'wav', parameters: buildTtsParams(params) })
+        });
+        if (!r.ok) {
+          try { const e = await r.json(); alert(e?.error?.message || 'Voice request failed'); }
+          catch { alert('Voice request failed'); }
+          return;
+        }
+        const blob = await r.blob();
+        await playBlob(blob);
+      } finally {
+        setVoiceBusy(false);
+      }
+    }
+
+    sendBtn.onclick = send;
+    voiceBtn.onclick = voice;
+  testVoiceBtn.onclick = testVoice;
+
+    function buildTtsParams(base) {
+      const p = { ...(base || {}) };
+      const wav = (speakerWavInput.value || '').trim();
+      if (wav) {
+        // Reject non-http(s) schemes like vscode-file:// which won't be reachable by Hugging Face
+        const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(wav);
+        if (hasScheme && !(wav.startsWith('http://') || wav.startsWith('https://'))) {
+          alert('Invalid speaker_wav. Please use a public http(s) URL, a path like /voices/John.wav, or just the filename in /voices.');
+        } else if (wav.startsWith('http://') || wav.startsWith('https://')) {
+          p.speaker_wav = wav;
+        } else if (wav.startsWith('/')) {
+          p.speaker_wav = location.origin + wav;
+        } else {
+          // Assume a filename placed under /voices
+          p.speaker_wav = location.origin + '/voices/' + wav;
+        }
+      }
+      p.language = 'en';
+      return p;
+    }
+  q.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+  startBtn.onclick = () => { q.focus(); window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }); };
+
+  // Initialize and save profile
+  function initProfileUi(){
+    userIdInput.value = getUserId() || '';
+    firstNameInput.value = localStorage.getItem('firstName') || '';
+    regionNameInput.value = localStorage.getItem('regionName') || '';
+  }
+  initProfileUi();
+  saveProfileBtn.onclick = async () => {
+    const userId = (userIdInput.value || '').trim();
+    if (!userId) { profileMsg('Please set a User ID', 'crimson'); return; }
+    setUserId(userId);
+    const firstName = (firstNameInput.value || '').trim();
+    const regionName = (regionNameInput.value || '').trim();
+    localStorage.setItem('firstName', firstName);
+    localStorage.setItem('regionName', regionName);
+    try {
+      // Try geolocation for lat/lon (optional)
+      let coords = null;
+      try {
+        coords = await new Promise((resolve, reject) => {
+          if (!navigator.geolocation) return resolve(null);
+          navigator.geolocation.getCurrentPosition((pos) => resolve(pos.coords), () => resolve(null), { enableHighAccuracy: false, timeout: 3000 });
+        });
+      } catch {}
+      const body = {
+        userId,
+        firstName: firstName || undefined,
+        regionName: regionName || undefined,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        locale: navigator.language,
+        latitude: coords?.latitude,
+        longitude: coords?.longitude
+      };
+      const r = await fetch('/profile', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': getApiKey() }, body: JSON.stringify(body) });
+      if (r.ok) profileMsg('Profile saved', 'green'); else profileMsg('Failed to save profile', 'crimson');
+    } catch { profileMsg('Failed to save profile', 'crimson'); }
+  };
+  </script>
+</body>
+</html>

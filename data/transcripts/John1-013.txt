@@ -1,0 +1,1 @@
+say, well, why are you failing so much? Well, it's because we're testing so much. The more you test, the more you fail, because you're doing things that you've never done before. And so your failure rate increases dramatically. You know, people that don't try new things.

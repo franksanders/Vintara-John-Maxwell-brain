@@ -1,0 +1,62 @@
+[
+  {
+    "query": "What is leadership?",
+    "expectedSubstrings": ["Leadership is influence"],
+    "expectedCategories": ["leadership_principles"]
+  },
+  {
+    "query": "How can I grow daily?",
+    "expectedSubstrings": ["Personal growth requires intentional daily actions"],
+    "expectedCategories": ["personal_growth"]
+  },
+  {
+    "query": "Why is listening important in communication?",
+    "expectedSubstrings": ["Listening earns the right to speak"],
+    "expectedCategories": ["communication"]
+  },
+  {
+    "query": "How do I build a strong team?",
+    "expectedSubstrings": ["Effective teams are built on trust", "psychological safety"],
+    "expectedCategories": ["leadership_principles", "communication"]
+  },
+  {
+    "query": "Influence vs authority—what matters?",
+    "expectedSubstrings": ["Leadership is influence, not position", "influence earns commitment"],
+    "expectedCategories": ["leadership_principles"]
+  },
+  {
+    "query": "Tips for resolving conflict at work",
+    "expectedSubstrings": ["Healthy conflict focuses on issues, not people", "Seek common ground"],
+    "expectedCategories": ["communication"]
+  },
+  {
+    "query": "How to make better decisions fast?",
+    "expectedSubstrings": ["Reversible decisions should be made fast", "Set decision criteria"],
+    "expectedCategories": ["leadership_principles"]
+  },
+  {
+    "query": "What does a mentor do?",
+    "expectedSubstrings": ["Mentoring accelerates growth", "asks questions", "offers feedback"],
+    "expectedCategories": ["personal_growth"]
+  },
+  {
+    "query": "How do I earn commitment from my team?",
+    "expectedSubstrings": ["influence earns commitment", "credibility"],
+    "expectedCategories": ["leadership_principles"]
+  },
+  {
+    "query": "How can teams feel safe to speak up?",
+    "expectedSubstrings": ["psychological safety", "feel safe to speak up"],
+    "expectedCategories": ["communication"]
+  },
+  {
+    "query": "What should I do when emotions rise in conflict?",
+    "expectedSubstrings": ["take a pause", "return to shared goals"],
+    "expectedCategories": ["communication"]
+  },
+  {
+    "query": "How do I avoid blind spots in decisions?",
+    "expectedSubstrings": ["diverse perspectives", "avoid blind spots"],
+    "expectedCategories": ["leadership_principles"]
+  }
+]

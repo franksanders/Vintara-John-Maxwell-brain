@@ -1,0 +1,1 @@
+And we're kind of on the edge, and so we're doing a lot of testing. That's the first part of the cycle. Well, the second step is failure, failing. We're testing, and then we're failing.

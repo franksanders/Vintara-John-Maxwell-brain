@@ -1,0 +1,1 @@
+If we expect a positive return on our failure, our whole response to failure will immediately change. It won't bother us at all to fail first. We'll jump in before anyone else.
