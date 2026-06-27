@@ -441,7 +441,10 @@ app.get('/metadata', async (_req: Request, res: Response) => {
 // Conversation management endpoints
 app.post('/conversation/start', (req: Request, res: Response) => {
   const { userId, seed, profile } = req.body || {};
-  const resolvedUserId = userId ? String(userId) : (profile?.userId ? String(profile.userId) : undefined);
+  // Auto-generate a userId if profile data is provided but no userId given
+  const resolvedUserId = userId ? String(userId)
+    : (profile?.userId ? String(profile.userId)
+    : (profile ? 'u_' + Math.random().toString(36).slice(2, 10) : undefined));
   const initial = Array.isArray(seed) ? seed : [];
   const normalizedProfile = normalizeProfile(profile, resolvedUserId);
   if (normalizedProfile) profiles.set(normalizedProfile.userId, normalizedProfile);
