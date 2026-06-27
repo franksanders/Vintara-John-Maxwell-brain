@@ -7,6 +7,8 @@ export interface ConversationThread {
   id: string;
   userId?: string;
   messages: ChatMessage[];
+  coachingSummary?: string;
+  userTurnCount: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -33,6 +35,9 @@ function loadStore() {
     for (const t of arr) {
       // Basic validation
       if (!t.id || !Array.isArray(t.messages)) continue;
+      t.userTurnCount = typeof t.userTurnCount === 'number'
+        ? t.userTurnCount
+        : t.messages.filter(m => m.role === 'user').length;
       threads.set(t.id, t);
     }
   } catch {
@@ -64,7 +69,15 @@ loadStore();
 export function createThread(userId?: string, seed?: ChatMessage[]): ConversationThread {
   const id = uuidv4();
   const now = Date.now();
-  const t: ConversationThread = { id, userId, messages: seed ? [...seed] : [], createdAt: now, updatedAt: now };
+  const messages = seed ? [...seed] : [];
+  const t: ConversationThread = {
+    id,
+    userId,
+    messages,
+    userTurnCount: messages.filter(m => m.role === 'user').length,
+    createdAt: now,
+    updatedAt: now
+  };
   threads.set(id, t);
   dirty = true;
   scheduleSave();
@@ -89,11 +102,25 @@ export function addMessage(id: string, msg: ChatMessage): ConversationThread | u
   const t = threads.get(id);
   if (!t) return undefined;
   t.messages.push(msg);
+  if (msg.role === 'user') t.userTurnCount++;
   t.updatedAt = Date.now();
   trimThread(t);
   dirty = true;
   scheduleSave();
   return t;
+}
+
+export function setCoachingSummary(id: string, summary: string): void {
+  const t = threads.get(id);
+  if (!t) return;
+  t.coachingSummary = summary;
+  t.updatedAt = Date.now();
+  dirty = true;
+  scheduleSave();
+}
+
+export function getCoachingSummary(id: string): string | undefined {
+  return threads.get(id)?.coachingSummary;
 }
 
 export function getHistory(id: string, maxTurns = 8): ChatMessage[] {

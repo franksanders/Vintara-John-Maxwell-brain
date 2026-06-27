@@ -9,15 +9,15 @@ import { fetchWebPage, ingestText, ingestPdf, ingestTranscript } from './ingest'
 import { toChunks } from './parse';
 import { indexChunks, search, searchDetailed, getIndexStats } from './retrieve';
 import { LRUCache, makeRetrievalKey } from './cache';
-import { buildPrompt, detectEmotionalSignal } from './prompt';
+import { buildPrompt } from './prompt';
 import { dedupStats } from './dedup';
 import { generateAnswer, generateChatAnswer, streamAnswer, streamChatAnswer, ChatMessage } from './generate';
 import { getMemory, upsertMemory, listMemories, recordFeedback, decayPreferences } from './memory';
 import { listConfigHistory, currentRuntimeConfig, updateRuntimeConfig } from './admin_config';
-import { createThread, addMessage, getThread, getHistory, listThreads, setThreadUser } from './conversation';
+import { createThread, addMessage, getThread, getHistory, listThreads, setThreadUser, setCoachingSummary, getCoachingSummary } from './conversation';
 import { synthesizeSpeech } from './voice';
 import { getDateTime, getWeather } from './context';
-import { getRelevantPersonaSnippet, getRelevantPersonaSnippets } from './persona';
+import { getRelevantPersonaSnippet } from './persona';
 import { UserProfile } from './types';
 import fs from 'fs';
 import { checkRateLimit, remainingTokens } from './rate_limit';
@@ -115,6 +115,63 @@ app.get('/corpus/stats', (_req: Request, res: Response) => {
 // --- Simple in-memory user profiles ---
 const profiles = new Map<string, UserProfile>();
 
+function normalizeProfile(input: any, fallbackUserId?: string): UserProfile | undefined {
+  const resolvedUserId = input?.userId ? String(input.userId) : fallbackUserId;
+  if (!resolvedUserId) return undefined;
+  return {
+    userId: resolvedUserId,
+    firstName: input?.firstName ? String(input.firstName) : undefined,
+    timezone: input?.timezone ? String(input.timezone) : undefined,
+    latitude: typeof input?.latitude === 'number' ? input.latitude : (input?.latitude ? Number(input.latitude) : undefined),
+    longitude: typeof input?.longitude === 'number' ? input.longitude : (input?.longitude ? Number(input.longitude) : undefined),
+    locale: input?.locale ? String(input.locale) : undefined,
+    regionName: input?.regionName ? String(input.regionName) : undefined,
+    role: input?.role ? String(input.role) : undefined,
+    seniority: input?.seniority ? String(input.seniority) : undefined,
+    industry: input?.industry ? String(input.industry) : undefined,
+    teamSize: typeof input?.teamSize === 'number' ? input.teamSize : (input?.teamSize ? Number(input.teamSize) : undefined),
+    goals: Array.isArray(input?.goals) ? input.goals.map((g: any) => String(g)).slice(0, 10) : undefined,
+    currentChallenge: input?.currentChallenge ? String(input.currentChallenge) : undefined,
+    tonePref: input?.tonePref === 'direct' || input?.tonePref === 'empathetic' ? input.tonePref : undefined,
+    brevityPref: input?.brevityPref === 'short' || input?.brevityPref === 'normal' ? input.brevityPref : undefined,
+    cadencePref: input?.cadencePref ? String(input.cadencePref) : undefined,
+    stakeholders: Array.isArray(input?.stakeholders) ? input.stakeholders.map((s: any) => String(s)).slice(0, 10) : undefined,
+    deadlines: Array.isArray(input?.deadlines)
+      ? input.deadlines
+          .slice(0, 10)
+          .map((d: any) => ({ name: String(d?.name || ''), date: String(d?.date || '') }))
+          .filter((d: { name: string; date: string }) => d.name && d.date)
+      : undefined,
+    boundaries: Array.isArray(input?.boundaries) ? input.boundaries.map((b: any) => String(b)).slice(0, 10) : undefined
+  };
+}
+
+function buildOpeningMessage(profile?: UserProfile): string {
+  if (profile?.firstName && profile.currentChallenge) {
+    return `${profile.firstName}, welcome. I've been thinking about leaders who face ${profile.currentChallenge}. Let me ask you — what would it mean to you personally if you made a real breakthrough there?`;
+  }
+  if (profile?.firstName) {
+    return `${profile.firstName}, I'm glad you're here. I'm John Maxwell. Before we dive in — what's the one area of your leadership you most want to grow in right now?`;
+  }
+  return "I'm glad you're here. I'm John Maxwell — I've spent over 50 years studying and teaching leadership. Before we dive in, I want to make this personal. What's your first name?";
+}
+
+function maybeRefreshCoachingSummary(id: string, userTurnCount: number): void {
+  if (userTurnCount <= 0 || userTurnCount % 5 !== 0) return;
+  void (async () => {
+    try {
+      const history = getHistory(id, 10);
+      const summaryPrompt = `Summarize this coaching session in 2-3 sentences. Focus on: (1) what the person is working on, (2) the main insight or commitment from the conversation so far. Write in third person, past tense. Be specific, not generic. History:\n${history.map(m => `${m.role}: ${m.content}`).join('\n')}`;
+      const result = await generateAnswer({
+        system: 'You summarize coaching conversations with specificity and continuity.',
+        context: summaryPrompt,
+        user: 'Summarize the coaching session.'
+      }, { maxTokens: 120, temperature: 0.4 });
+      setCoachingSummary(id, result.answer);
+    } catch {}
+  })();
+}
+
 app.get('/profile', (req: Request, res: Response) => {
   const userId = String((req.query.userId || '').toString() || '');
   if (!userId) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Missing userId' } });
@@ -122,108 +179,55 @@ app.get('/profile', (req: Request, res: Response) => {
 });
 
 app.post('/profile', (req: Request, res: Response) => {
-  const { userId, firstName, timezone, latitude, longitude, locale, regionName,
-    role, seniority, industry, teamSize, goals, currentChallenge, tonePref, brevityPref, cadencePref, stakeholders, deadlines, boundaries } = req.body || {};
+  const { userId } = req.body || {};
   if (!userId) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Missing userId' } });
-  const p: UserProfile = {
-    userId: String(userId),
-    firstName: firstName ? String(firstName) : undefined,
-    timezone: timezone ? String(timezone) : undefined,
-    latitude: typeof latitude === 'number' ? latitude : (latitude ? Number(latitude) : undefined),
-    longitude: typeof longitude === 'number' ? longitude : (longitude ? Number(longitude) : undefined),
-    locale: locale ? String(locale) : undefined,
-    regionName: regionName ? String(regionName) : undefined,
-    role: role ? String(role) : undefined,
-    seniority: seniority ? String(seniority) : undefined,
-    industry: industry ? String(industry) : undefined,
-    teamSize: typeof teamSize === 'number' ? teamSize : (teamSize ? Number(teamSize) : undefined),
-    goals: Array.isArray(goals) ? goals.map((g: any) => String(g)).slice(0, 10) : undefined,
-    currentChallenge: currentChallenge ? String(currentChallenge) : undefined,
-    tonePref: tonePref === 'direct' || tonePref === 'empathetic' ? tonePref : undefined,
-    brevityPref: brevityPref === 'short' || brevityPref === 'normal' ? brevityPref : undefined,
-    cadencePref: cadencePref ? String(cadencePref) : undefined,
-    stakeholders: Array.isArray(stakeholders) ? stakeholders.map((s: any) => String(s)).slice(0, 10) : undefined,
-    deadlines: Array.isArray(deadlines) ? deadlines.slice(0, 10).map((d: any) => ({ name: String(d?.name || ''), date: String(d?.date || '') })).filter(d => d.name && d.date) : undefined,
-    boundaries: Array.isArray(boundaries) ? boundaries.map((b: any) => String(b)).slice(0, 10) : undefined
-  };
+  const p = normalizeProfile(req.body, String(userId));
+  if (!p) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Missing userId' } });
   profiles.set(p.userId, p);
   res.json({ ok: true, profile: p });
 });
 
-// Helper: build prompt with full user context, session arc, and emotional awareness.
-async function buildPersonalizedPrompt(
-  query: string,
-  results: Array<{ chunk: any; score: number }>,
-  userId?: string,
-  opts: { isFirstMessage?: boolean } = {}
-) {
-  const emotionalSignal = detectEmotionalSignal(query);
-  const prompt = buildPrompt(query, results, { isFirstMessage: opts.isFirstMessage, emotionalSignal });
-
-  const parts: string[] = [prompt.system];
+// Helper: build prompt with personal touch and dynamic context
+async function buildPersonalizedPrompt(query: string, results: Array<{ chunk: any; score: number }>, userId?: string, threadId?: string) {
+  const prompt = buildPrompt(query, results);
+  let nameFrag = '';
+  let contextFrag = '';
+  let personaFrag = '';
+  let profileFrag = '';
+  let summaryFrag = '';
   const profile = userId ? profiles.get(userId) : undefined;
-
-  if (profile?.firstName) {
-    parts.push(`The person's name is ${profile.firstName}. Use it when it adds genuine warmth -- not more than once or twice per response.`);
-  }
-
+  if (profile?.firstName) nameFrag = `Use their first name "${profile.firstName}" when it adds warmth—don’t overuse it.`;
   if (profile) {
     const hints: string[] = [];
-    if (profile.role || profile.seniority) {
-      hints.push(`Role: ${[profile.seniority, profile.role].filter(Boolean).join(' ')}`);
-    }
-    if (profile.industry) hints.push(`Industry: ${profile.industry}`);
-    if (profile.teamSize) hints.push(`Team size: approximately ${profile.teamSize} people`);
-    if (profile.tonePref) hints.push(`Preferred tone: ${profile.tonePref}`);
-    if (profile.brevityPref === 'short') hints.push('Keep responses concise -- they prefer shorter answers.');
-    if (profile.currentChallenge) {
-      hints.push(`Current challenge: "${profile.currentChallenge}" -- connect your advice back to this when relevant.`);
-    }
-    if (profile.goals && profile.goals.length) {
-      hints.push(`Goals: ${profile.goals.slice(0, 3).join('; ')} -- reference these by name when relevant.`);
-    }
-    if (profile.stakeholders && profile.stakeholders.length) {
-      hints.push(`Key stakeholders: ${profile.stakeholders.slice(0, 3).join(', ')}`);
-    }
-    if (profile.deadlines && profile.deadlines.length) {
-      const now = Date.now();
-      const soon = profile.deadlines.filter(d => {
-        const ms = new Date(d.date).getTime();
-        return ms > now && ms - now < 14 * 24 * 60 * 60 * 1000;
-      });
-      if (soon.length) {
-        hints.push(`Upcoming deadlines (within 14 days): ${soon.map(d => `${d.name} on ${d.date}`).join('; ')} -- factor in this urgency.`);
-      }
-    }
-    if (profile.boundaries && profile.boundaries.length) {
-      hints.push(`Topics to avoid: ${profile.boundaries.join(', ')}`);
-    }
-    if (hints.length) {
-      parts.push('Person context (use naturally):\n' + hints.map(h => '  - ' + h).join('\n'));
-    }
+    if (profile.role || profile.seniority) hints.push(`Role: ${[profile.seniority, profile.role].filter(Boolean).join(' ')}`.trim());
+    if (profile.brevityPref) hints.push(`Brevity: ${profile.brevityPref}`);
+    if (profile.tonePref) hints.push(`Tone: ${profile.tonePref}`);
+    if (profile.currentChallenge) hints.push(`Focus: ${profile.currentChallenge}`);
+    // Cap to ~2 lines max
+    if (hints.length) profileFrag = `Profile hints (do not override grounded content): ${hints.slice(0, 3).join('; ')}`;
   }
-
-  if (config.content.personaSnippetsEnabled && config.content.personaPath) {
-    const snips = getRelevantPersonaSnippets(query, config.content.personaPath, 2);
-    if (snips.length) {
-      parts.push('Personal anecdotes you may reference (use at most one, 1-2 sentences, only if genuinely useful):\n' + snips.map(s => '  - ' + s).join('\n'));
-    }
+  const coachingSummary = threadId ? getCoachingSummary(threadId) : undefined;
+  if (coachingSummary) {
+    summaryFrag = `Coaching session summary (for continuity — reference naturally, not verbatim): ${coachingSummary}`;
   }
-
   if (config.context.dateTimeEnabled || config.context.weatherEnabled) {
     const dt = config.context.dateTimeEnabled ? getDateTime(profile) : undefined;
     const weather = config.context.weatherEnabled ? await getWeather(profile) : null;
     const bits: string[] = [];
-    if (dt) bits.push(`Current time: ${dt.local}`);
+    if (dt) bits.push(`Now: ${dt.local} (local time)`);
     if (weather && !Number.isNaN(weather.temperatureC)) {
       const where = profile?.regionName ? ` in ${profile.regionName}` : '';
-      bits.push(`Weather${where}: ${weather.summary}, ${weather.temperatureC.toFixed(1)}C`);
+      bits.push(`Weather${where}: ${weather.summary}, ${weather.temperatureC.toFixed(1)}°C/${weather.temperatureF.toFixed(1)}°F`);
     }
-    if (bits.length) parts.push('Live context (do not use to alter facts of the teachings):\n' + bits.join('\n'));
+    if (bits.length) contextFrag = `\n---\nLive context (do not use to change facts of the teachings):\n${bits.join('\\n')}`;
   }
-
-  const system = parts.filter(Boolean).join('\n\n');
-  return { ...prompt, system };
+  // Add at most one supportive persona snippet when explicitly helpful
+  if (config.content.personaSnippetsEnabled && config.content.personaPath) {
+    const snip = getRelevantPersonaSnippet(query, config.content.personaPath);
+    if (snip) personaFrag = `One brief, relevant personal aside you may reference (optional, keep to 1–2 sentences): ${snip}`;
+  }
+  const system = [prompt.system, nameFrag, profileFrag, summaryFrag, personaFrag, contextFrag].filter(Boolean).join('\n');
+  return { ...prompt, system } as typeof prompt;
 }
 
 const IngestSchema = z.object({
@@ -436,20 +440,18 @@ app.get('/metadata', async (_req: Request, res: Response) => {
 
 // Conversation management endpoints
 app.post('/conversation/start', (req: Request, res: Response) => {
-  const { userId, seed } = req.body || {};
+  const { userId, seed, profile } = req.body || {};
+  const resolvedUserId = userId ? String(userId) : (profile?.userId ? String(profile.userId) : undefined);
   const initial = Array.isArray(seed) ? seed : [];
-  // Show opening message only for new/anonymous users
-  if (!userId) {
-    const opening: ChatMessage = {
-      role: 'assistant',
-      content: "Hello, I’m John C. Maxwell. It’s good to meet you. I’m here to serve you as a coach—practical, encouraging, and honest. Before we dive in, who am I speaking with? What’s your first name?"
-    };
-    const t = createThread(undefined, [opening, ...initial]);
-    res.json({ id: t.id, openingMessage: opening.content });
-  } else {
-    const t = createThread(userId, initial);
-    res.json({ id: t.id });
-  }
+  const normalizedProfile = normalizeProfile(profile, resolvedUserId);
+  if (normalizedProfile) profiles.set(normalizedProfile.userId, normalizedProfile);
+  const openingProfile = normalizedProfile || (resolvedUserId ? profiles.get(resolvedUserId) : undefined);
+  const opening: ChatMessage = {
+    role: 'assistant',
+    content: buildOpeningMessage(openingProfile)
+  };
+  const t = createThread(resolvedUserId, [opening, ...initial]);
+  res.json({ id: t.id, openingMessage: opening.content });
 });
 
 app.get('/conversation', (_req: Request, res: Response) => {
@@ -476,21 +478,20 @@ app.post('/conversation/:id/send', async (req: Request, res: Response, next: Nex
         profiles.set(newUserId, { userId: newUserId, firstName });
       }
     }
-    // Detect first user message for session arc warmup
-    const priorMessages = getHistory(id);
-    const isFirstMessage = priorMessages.filter(m => m.role === 'user').length === 0;
     addMessage(id, { role: 'user', content: userText });
     let results: Array<{ chunk: any; score: number }> = [];
     if (config.content.retrievalEnabled) {
       const { alpha, beta, gamma } = config.retrieval;
+      const mem = t.userId ? getMemory(t.userId) : undefined;
       if (t.userId) decayPreferences(t.userId);
       const detailed = await searchDetailed(query, topK, t.userId, { alpha, beta, gamma });
       results = detailed.map(d => ({ chunk: d.chunk, score: d.score }));
     }
-    const prompt = await buildPersonalizedPrompt(query, results, t.userId, { isFirstMessage });
+  const prompt = await buildPersonalizedPrompt(query, results, t.userId, id);
     const history = getHistory(id);
-    const gen = await generateChatAnswer(prompt, history, { temperature, maxTokens, topP, presencePenalty, frequencyPenalty });
-    addMessage(id, { role: 'assistant', content: gen.answer });
+  const gen = await generateChatAnswer(prompt, history, { temperature, maxTokens, topP, presencePenalty, frequencyPenalty });
+    const updatedThread = addMessage(id, { role: 'assistant', content: gen.answer });
+    maybeRefreshCoachingSummary(id, updatedThread?.userTurnCount ?? t.userTurnCount);
     // Enrich citations
     const resultsMap = new Map<number, (typeof results)[number]>();
     results.forEach((r: any, idx: number) => resultsMap.set(idx + 1, r));
@@ -526,15 +527,13 @@ app.post('/conversation/:id/stream', async (req: Request, res: Response, next: N
         profiles.set(newUserId, { userId: newUserId, firstName });
       }
     }
-    // Detect first user message for session arc warmup
-    const priorMsgs = getHistory(id);
-    const isFirstMsg = priorMsgs.filter(m => m.role === 'user').length === 0;
     addMessage(id, { role: 'user', content: userText });
     const { alpha, beta, gamma } = config.retrieval;
+    const mem = t.userId ? getMemory(t.userId) : undefined;
     if (t.userId) decayPreferences(t.userId);
     const detailed = await searchDetailed(query, topK, t.userId, { alpha, beta, gamma });
-    const results = detailed.map(d => ({ chunk: d.chunk, score: d.score }));
-    const prompt = await buildPersonalizedPrompt(query, results, t.userId, { isFirstMessage: isFirstMsg });
+  const results = detailed.map(d => ({ chunk: d.chunk, score: d.score }));
+  const prompt = await buildPersonalizedPrompt(query, results, t.userId, id);
     const history = getHistory(id);
     // SSE setup
     res.setHeader('Content-Type', 'text/event-stream');
@@ -574,7 +573,8 @@ app.post('/conversation/:id/stream', async (req: Request, res: Response, next: N
     }
     // After stream, finalize and store assistant message (regenerate once for cache consistency)
   const final = await generateChatAnswer(prompt, history, { temperature, maxTokens, topP, presencePenalty, frequencyPenalty });
-    addMessage(id, { role: 'assistant', content: final.answer });
+    const updatedThread = addMessage(id, { role: 'assistant', content: final.answer });
+    maybeRefreshCoachingSummary(id, updatedThread?.userTurnCount ?? t.userTurnCount);
     res.end();
   } catch (err) { next(err); }
 });
@@ -703,26 +703,6 @@ function startServer(port: number, attemptsLeft = 5) {
 
 startServer(config.port);
 
-// Startup check: warn if corpus is empty and transcripts exist
-setTimeout(() => {
-  try {
-    const stats = getIndexStats();
-    if (!stats || stats.chunks === 0) {
-      const transcriptDir = path.join(process.cwd(), 'data/transcripts');
-      if (fs.existsSync(transcriptDir)) {
-        const txFiles = fs.readdirSync(transcriptDir).filter(f => f.endsWith('.txt'));
-        if (txFiles.length > 0) {
-          logger.warn(
-            `⚠️  Vector index is empty but ${txFiles.length} transcripts found in data/transcripts/.` +
-            ' Run: npm run ingest:transcripts -- data/transcripts http://localhost:3000 <api-key>' +
-            ' (or set AUTO_INGEST_DIR=data/transcripts in .env to auto-ingest on startup)'
-          );
-        }
-      }
-    }
-  } catch { /* non-critical */ }
-}, 2000);
-
 // Optional: auto-ingest transcripts from a folder on startup
 // Track auto-ingest progress for visibility
 const autoIngestProgress: {
@@ -748,11 +728,6 @@ const autoIngestProgress: {
     autoIngestProgress.processed = 0;
     autoIngestProgress.failed = 0;
     logger.info({ dir: abs, count: files.length }, 'Auto-ingesting transcripts');
-    // Warn if the vector index is empty but transcripts are available
-    const indexStats = getIndexStats();
-    if (!indexStats || indexStats.chunks === 0) {
-      logger.warn('Vector index is empty. Transcripts will be auto-ingested now. You can also run: npm run ingest:transcripts');
-    }
     for (const f of files) {
       try {
         const txtPath = path.join(abs, f);
