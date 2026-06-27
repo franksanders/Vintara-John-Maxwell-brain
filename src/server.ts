@@ -9,7 +9,7 @@ import { fetchWebPage, ingestText, ingestPdf, ingestTranscript } from './ingest'
 import { toChunks } from './parse';
 import { indexChunks, search, searchDetailed, getIndexStats } from './retrieve';
 import { LRUCache, makeRetrievalKey } from './cache';
-import { buildPrompt } from './prompt';
+import { buildPrompt, detectEmotionalSignal } from './prompt';
 import { dedupStats } from './dedup';
 import { generateAnswer, generateChatAnswer, streamAnswer, streamChatAnswer, ChatMessage } from './generate';
 import { getMemory, upsertMemory, listMemories, recordFeedback, decayPreferences } from './memory';
@@ -17,7 +17,7 @@ import { listConfigHistory, currentRuntimeConfig, updateRuntimeConfig } from './
 import { createThread, addMessage, getThread, getHistory, listThreads, setThreadUser } from './conversation';
 import { synthesizeSpeech } from './voice';
 import { getDateTime, getWeather } from './context';
-import { getRelevantPersonaSnippet } from './persona';
+import { getRelevantPersonaSnippet, getRelevantPersonaSnippets } from './persona';
 import { UserProfile } from './types';
 import fs from 'fs';
 import { checkRateLimit, remainingTokens } from './rate_limit';
@@ -150,42 +150,80 @@ app.post('/profile', (req: Request, res: Response) => {
   res.json({ ok: true, profile: p });
 });
 
-// Helper: build prompt with personal touch and dynamic context
-async function buildPersonalizedPrompt(query: string, results: Array<{ chunk: any; score: number }>, userId?: string) {
-  const prompt = buildPrompt(query, results);
-  let nameFrag = '';
-  let contextFrag = '';
-  let personaFrag = '';
-  let profileFrag = '';
+// Helper: build prompt with full user context, session arc, and emotional awareness.
+async function buildPersonalizedPrompt(
+  query: string,
+  results: Array<{ chunk: any; score: number }>,
+  userId?: string,
+  opts: { isFirstMessage?: boolean } = {}
+) {
+  const emotionalSignal = detectEmotionalSignal(query);
+  const prompt = buildPrompt(query, results, { isFirstMessage: opts.isFirstMessage, emotionalSignal });
+
+  const parts: string[] = [prompt.system];
   const profile = userId ? profiles.get(userId) : undefined;
-  if (profile?.firstName) nameFrag = `Use their first name "${profile.firstName}" when it adds warmth—don’t overuse it.`;
+
+  if (profile?.firstName) {
+    parts.push(`The person's name is ${profile.firstName}. Use it when it adds genuine warmth -- not more than once or twice per response.`);
+  }
+
   if (profile) {
     const hints: string[] = [];
-    if (profile.role || profile.seniority) hints.push(`Role: ${[profile.seniority, profile.role].filter(Boolean).join(' ')}`.trim());
-    if (profile.brevityPref) hints.push(`Brevity: ${profile.brevityPref}`);
-    if (profile.tonePref) hints.push(`Tone: ${profile.tonePref}`);
-    if (profile.currentChallenge) hints.push(`Focus: ${profile.currentChallenge}`);
-    // Cap to ~2 lines max
-    if (hints.length) profileFrag = `Profile hints (do not override grounded content): ${hints.slice(0, 3).join('; ')}`;
+    if (profile.role || profile.seniority) {
+      hints.push(`Role: ${[profile.seniority, profile.role].filter(Boolean).join(' ')}`);
+    }
+    if (profile.industry) hints.push(`Industry: ${profile.industry}`);
+    if (profile.teamSize) hints.push(`Team size: approximately ${profile.teamSize} people`);
+    if (profile.tonePref) hints.push(`Preferred tone: ${profile.tonePref}`);
+    if (profile.brevityPref === 'short') hints.push('Keep responses concise -- they prefer shorter answers.');
+    if (profile.currentChallenge) {
+      hints.push(`Current challenge: "${profile.currentChallenge}" -- connect your advice back to this when relevant.`);
+    }
+    if (profile.goals && profile.goals.length) {
+      hints.push(`Goals: ${profile.goals.slice(0, 3).join('; ')} -- reference these by name when relevant.`);
+    }
+    if (profile.stakeholders && profile.stakeholders.length) {
+      hints.push(`Key stakeholders: ${profile.stakeholders.slice(0, 3).join(', ')}`);
+    }
+    if (profile.deadlines && profile.deadlines.length) {
+      const now = Date.now();
+      const soon = profile.deadlines.filter(d => {
+        const ms = new Date(d.date).getTime();
+        return ms > now && ms - now < 14 * 24 * 60 * 60 * 1000;
+      });
+      if (soon.length) {
+        hints.push(`Upcoming deadlines (within 14 days): ${soon.map(d => `${d.name} on ${d.date}`).join('; ')} -- factor in this urgency.`);
+      }
+    }
+    if (profile.boundaries && profile.boundaries.length) {
+      hints.push(`Topics to avoid: ${profile.boundaries.join(', ')}`);
+    }
+    if (hints.length) {
+      parts.push('Person context (use naturally):\n' + hints.map(h => '  - ' + h).join('\n'));
+    }
   }
+
+  if (config.content.personaSnippetsEnabled && config.content.personaPath) {
+    const snips = getRelevantPersonaSnippets(query, config.content.personaPath, 2);
+    if (snips.length) {
+      parts.push('Personal anecdotes you may reference (use at most one, 1-2 sentences, only if genuinely useful):\n' + snips.map(s => '  - ' + s).join('\n'));
+    }
+  }
+
   if (config.context.dateTimeEnabled || config.context.weatherEnabled) {
     const dt = config.context.dateTimeEnabled ? getDateTime(profile) : undefined;
     const weather = config.context.weatherEnabled ? await getWeather(profile) : null;
     const bits: string[] = [];
-    if (dt) bits.push(`Now: ${dt.local} (local time)`);
+    if (dt) bits.push(`Current time: ${dt.local}`);
     if (weather && !Number.isNaN(weather.temperatureC)) {
       const where = profile?.regionName ? ` in ${profile.regionName}` : '';
-      bits.push(`Weather${where}: ${weather.summary}, ${weather.temperatureC.toFixed(1)}°C/${weather.temperatureF.toFixed(1)}°F`);
+      bits.push(`Weather${where}: ${weather.summary}, ${weather.temperatureC.toFixed(1)}C`);
     }
-    if (bits.length) contextFrag = `\n---\nLive context (do not use to change facts of the teachings):\n${bits.join('\\n')}`;
+    if (bits.length) parts.push('Live context (do not use to alter facts of the teachings):\n' + bits.join('\n'));
   }
-  // Add at most one supportive persona snippet when explicitly helpful
-  if (config.content.personaSnippetsEnabled && config.content.personaPath) {
-    const snip = getRelevantPersonaSnippet(query, config.content.personaPath);
-    if (snip) personaFrag = `One brief, relevant personal aside you may reference (optional, keep to 1–2 sentences): ${snip}`;
-  }
-  const system = [prompt.system, nameFrag, profileFrag, personaFrag, contextFrag].filter(Boolean).join('\n');
-  return { ...prompt, system } as typeof prompt;
+
+  const system = parts.filter(Boolean).join('\n\n');
+  return { ...prompt, system };
 }
 
 const IngestSchema = z.object({
@@ -438,18 +476,20 @@ app.post('/conversation/:id/send', async (req: Request, res: Response, next: Nex
         profiles.set(newUserId, { userId: newUserId, firstName });
       }
     }
+    // Detect first user message for session arc warmup
+    const priorMessages = getHistory(id);
+    const isFirstMessage = priorMessages.filter(m => m.role === 'user').length === 0;
     addMessage(id, { role: 'user', content: userText });
     let results: Array<{ chunk: any; score: number }> = [];
     if (config.content.retrievalEnabled) {
       const { alpha, beta, gamma } = config.retrieval;
-      const mem = t.userId ? getMemory(t.userId) : undefined;
       if (t.userId) decayPreferences(t.userId);
       const detailed = await searchDetailed(query, topK, t.userId, { alpha, beta, gamma });
       results = detailed.map(d => ({ chunk: d.chunk, score: d.score }));
     }
-  const prompt = await buildPersonalizedPrompt(query, results, t.userId);
+    const prompt = await buildPersonalizedPrompt(query, results, t.userId, { isFirstMessage });
     const history = getHistory(id);
-  const gen = await generateChatAnswer(prompt, history, { temperature, maxTokens, topP, presencePenalty, frequencyPenalty });
+    const gen = await generateChatAnswer(prompt, history, { temperature, maxTokens, topP, presencePenalty, frequencyPenalty });
     addMessage(id, { role: 'assistant', content: gen.answer });
     // Enrich citations
     const resultsMap = new Map<number, (typeof results)[number]>();
@@ -486,13 +526,15 @@ app.post('/conversation/:id/stream', async (req: Request, res: Response, next: N
         profiles.set(newUserId, { userId: newUserId, firstName });
       }
     }
+    // Detect first user message for session arc warmup
+    const priorMsgs = getHistory(id);
+    const isFirstMsg = priorMsgs.filter(m => m.role === 'user').length === 0;
     addMessage(id, { role: 'user', content: userText });
     const { alpha, beta, gamma } = config.retrieval;
-    const mem = t.userId ? getMemory(t.userId) : undefined;
     if (t.userId) decayPreferences(t.userId);
     const detailed = await searchDetailed(query, topK, t.userId, { alpha, beta, gamma });
-  const results = detailed.map(d => ({ chunk: d.chunk, score: d.score }));
-  const prompt = await buildPersonalizedPrompt(query, results, t.userId);
+    const results = detailed.map(d => ({ chunk: d.chunk, score: d.score }));
+    const prompt = await buildPersonalizedPrompt(query, results, t.userId, { isFirstMessage: isFirstMsg });
     const history = getHistory(id);
     // SSE setup
     res.setHeader('Content-Type', 'text/event-stream');
@@ -661,6 +703,26 @@ function startServer(port: number, attemptsLeft = 5) {
 
 startServer(config.port);
 
+// Startup check: warn if corpus is empty and transcripts exist
+setTimeout(() => {
+  try {
+    const stats = getIndexStats();
+    if (!stats || stats.chunks === 0) {
+      const transcriptDir = path.join(process.cwd(), 'data/transcripts');
+      if (fs.existsSync(transcriptDir)) {
+        const txFiles = fs.readdirSync(transcriptDir).filter(f => f.endsWith('.txt'));
+        if (txFiles.length > 0) {
+          logger.warn(
+            `⚠️  Vector index is empty but ${txFiles.length} transcripts found in data/transcripts/.` +
+            ' Run: npm run ingest:transcripts -- data/transcripts http://localhost:3000 <api-key>' +
+            ' (or set AUTO_INGEST_DIR=data/transcripts in .env to auto-ingest on startup)'
+          );
+        }
+      }
+    }
+  } catch { /* non-critical */ }
+}, 2000);
+
 // Optional: auto-ingest transcripts from a folder on startup
 // Track auto-ingest progress for visibility
 const autoIngestProgress: {
@@ -686,6 +748,11 @@ const autoIngestProgress: {
     autoIngestProgress.processed = 0;
     autoIngestProgress.failed = 0;
     logger.info({ dir: abs, count: files.length }, 'Auto-ingesting transcripts');
+    // Warn if the vector index is empty but transcripts are available
+    const indexStats = getIndexStats();
+    if (!indexStats || indexStats.chunks === 0) {
+      logger.warn('Vector index is empty. Transcripts will be auto-ingested now. You can also run: npm run ingest:transcripts');
+    }
     for (const f of files) {
       try {
         const txtPath = path.join(abs, f);
