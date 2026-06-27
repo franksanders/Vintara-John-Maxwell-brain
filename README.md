@@ -1,225 +1,278 @@
-# John Maxwell Voice Coach Brain (Scaffold)
+# John Maxwell AI Coaching Brain
 
-A Node.js + TypeScript foundation for a retrieval-augmented coaching assistant in the style of John Maxwell. This scaffold includes ingestion, parsing, embeddings, vector store, retrieval, prompt construction, generation, and an Express API.
+A production-ready Node.js + TypeScript RAG (Retrieval-Augmented Generation) backend that delivers a personalized coaching experience in the voice of John C. Maxwell. The system ingests Maxwell's transcripts, retrieves the most relevant teachings for each question, and generates warm, practical, first-person coaching responses — just as Maxwell himself would speak.
 
-Note: Maxwell-specific advanced logic (streaming generation, richer citations, cross-encoder reranking) are still TODOs; a basic `/generate` endpoint is now implemented with OpenAI Chat (stub fallback if no API key).
+---
+
+## Features
+
+- **Maxwell's voice** — Rich system prompt encoding Maxwell's 5 Levels of Leadership, 21 Laws, storytelling cadence, emotional warmth, and first-name coaching style
+- **490 real transcript segments** — All ingested into Qdrant vector store; auto-reingested on server start
+- **Curated persona** — 8 real Maxwell stories (father's Depression-era work ethic, "growth is happiness" mentor, "do it now" exercise, Robert Schubert failure pivot, Andrea Jung "give 60/take 40", and more)
+- **Dynamic personalized opening** — Three greeting variants based on whether the user has provided their name, challenge, or nothing
+- **Coaching session memory** — Auto-generates a 2–3 sentence summary every 5 turns and injects it into the system prompt for continuity
+- **Immersive coaching UI** — Forest-green/gold aesthetic, SSE real-time streaming, Maxwell avatar, 3-step onboarding wizard, mobile-first
+- **Blended retrieval** — Semantic (vector) + lexical overlap + 11-category Maxwell taxonomy weighting
+- **True SSE streaming** — Tokens stream directly from OpenAI with no buffering
+- **No citation leak** — `[#N]` markers are always stripped from the spoken answer
+- **Emotional awareness** — Detects distress signals and adjusts Maxwell's opening acknowledgment
+- **TTS-ready** — Voice pipeline wired for Hugging Face Inference API (parler-tts recommended)
+- **Persistent conversations** — Threads stored to `.cache/conversations.json`, survive server restarts
+
+---
 
 ## Quick start
 
-1. Copy .env example
+### 1. Install and configure
 
 ```sh
 cp .env.example .env
+# Edit .env — at minimum set OPENAI_API_KEY
+npm install
 ```
 
-2. Install deps and run dev
+### 2. Start Qdrant (vector database)
 
 ```sh
-npm install
-npm run dev
+docker run -d --name maxwell-qdrant -p 6333:6333 \
+  -v maxwell-qdrant-data:/qdrant/storage qdrant/qdrant
 ```
 
-3. Try endpoints
-	- GET /health
-	- POST /ingest { type:"web", source:"https://example.com" } OR { type:"text", source:"Manual", content:"..." }
-	- POST /ingest { type:"pdfBase64", source:"Leadership Growth", base64:"<base64>" }
-	- POST /query { query: "How to lead?", topK: 5 }
-		- POST /generate { query: "How to lead?", topK: 5, temperature: 0.7 }
-		- POST /generate/stream { query: "How to lead?" }  (Server-Sent Events)
-	- GET /metadata
-	- GET /memory/:userId
-	- POST /memory { userId: "u1", preferredCategories:["leadership_principles"] }
+### 3. Start the server
+
+```sh
+npm start          # production (uses dist/)
+# or
+npm run dev        # development (ts-node, hot reload)
+```
+
+The server auto-ingests transcripts from `data/transcripts/` on startup.
+
+### 4. Open the coaching UI
+
+Navigate to `http://localhost:3000` in your browser. You'll be walked through a 3-step onboarding and then into a live coaching session.
+
+> **Without `OPENAI_API_KEY`:** The server runs in stub mode with a local hash embedder. Structural features work but answer quality is placeholder text. Set the key for real Maxwell-voiced responses.
+
+---
+
+## Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPENAI_API_KEY` | — | **Required for real responses.** Get from platform.openai.com |
+| `OPENAI_CHAT_MODEL` | `gpt-4o-mini` | Chat model for generation |
+| `EMBEDDING_PROVIDER` | `openai` | `openai` (recommended) or `local` (dev/stub) |
+| `EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model |
+| `VECTOR_DB` | `qdrant` | `qdrant`, `pinecone`, or `memory` |
+| `QDRANT_URL` | `http://localhost:6333` | Qdrant instance URL |
+| `PERSONA_PATH` | `./data/persona/john_persona_curated.md` | Curated persona stories file |
+| `RETRIEVE_ALPHA` | `0.6` | Weight for semantic (vector) score |
+| `RETRIEVE_BETA` | `0.2` | Weight for lexical overlap score |
+| `RETRIEVE_GAMMA` | `0.1` | Weight for taxonomy tag score |
+| `ADMIN_API_KEY` | `changeme_admin_key` | Admin endpoint key |
+| `API_KEYS` | `changeme_client_key_a,...` | Comma-separated client keys |
+| `CONVERSATION_STORE_PATH` | `.cache/conversations.json` | Thread persistence path |
+| `HUGGINGFACE_API_TOKEN` | — | For TTS voice synthesis |
+| `HF_TTS_MODEL` | `parler-tts/parler-tts-large-v1` | Recommended TTS model |
+| `HF_TTS_PARAMETERS` | *(see .env.example)* | Voice description for parler-tts |
+
+See `.env.example` for the complete list.
+
+---
+
+## API reference
+
+### Conversation (primary interface)
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/conversation/start` | Start a new session. Body: `{ profile?, userId?, seed? }`. Returns `{ id, openingMessage }` |
+| `POST` | `/conversation/:id/send` | Send a message. Body: `{ query, topK?, temperature? }`. Returns `{ answer, citations, model }` |
+| `POST` | `/conversation/:id/stream` | Same as send but streams tokens via SSE |
+| `GET` | `/conversation` | List all threads |
+| `GET` | `/conversation/:id` | Get a thread's messages |
+
+### Profile
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/profile?userId=` | Get user profile |
+| `POST` | `/profile` | Save profile (firstName, role, industry, currentChallenge, goals, …) |
+
+### Ingestion
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/ingest` | Ingest URL, raw text, or base64 PDF |
+| `POST` | `/ingest/transcript` | Ingest a Maxwell transcript segment |
+| `GET` | `/corpus/stats` | Check ingestion progress and chunk count |
+
+### Generation (stateless)
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/generate` | One-shot query + generate (no thread) |
+| `POST` | `/generate/stream` | One-shot SSE stream |
+| `POST` | `/generate/voice` | Generate answer + synthesize to audio |
+| `POST` | `/tts` | Synthesize text to audio |
+
+### Other
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | Server status, embedding provider, voice config |
+| `GET` | `/query` | Raw retrieval without generation |
+| `GET` | `/memory` | User memory/preferences |
+| `POST` | `/feedback` | Record which chunks were helpful |
+| `GET` | `/admin/config` | View runtime config *(admin key required)* |
+| `POST` | `/admin/config` | Patch runtime config *(admin key required)* |
+
+---
 
 ## Architecture
-Core modules:
-- `src/ingest.ts` – web/text/PDF ingestion
-- `src/parse.ts` – cleaning + chunking + taxonomy tagging
-- `src/embed.ts` – embedders and vector stores (memory / Qdrant / Pinecone)
-- `src/retrieve.ts` – indexing + blended scoring (vector + lexical + tag) + optional rerank
-- `src/rerank.ts` – pseudo cross-encoder reranker
-- `src/prompt.ts` – assemble system + context with scores & tags
-- `src/generate.ts` – answer generation (OpenAI / stub) + citations + streaming
-- `src/memory.ts` – user memory & preferences
-- `src/cache.ts` – LRU caches for retrieval & generation
-- `src/rate_limit.ts` – token bucket rate limiting
-- `src/server.ts` – Express API, auth, metrics
-- Support: `src/config.ts`, `src/logger.ts`, `src/errors.ts`, `src/types.ts`, `src/utils.ts`
 
-### Sequence Flow
-```mermaid
-sequenceDiagram
-	participant Client
-	participant API as Express API
-	participant Ingest as Ingestion/Parsing
-	participant Store as Vector Store
-	participant Retrieve as Retrieval+Rerank
-	participant Prompt as Prompt Builder
-	participant Gen as Generation
-	participant Cache as Caches
-
-	Client->>API: POST /ingest (url/text/pdfBase64)
-	API->>Ingest: fetch & chunk
-	Ingest->>Store: upsert embeddings
-	API-->>Client: { docId, chunks }
-
-	Client->>API: POST /generate (query)
-	API->>Cache: lookup retrieval key
-	alt cache miss
-		API->>Store: vector query (topM)
-		Store-->>API: candidates
-		API->>Retrieve: blend scores + maybe rerank
-		Retrieve-->>API: topK results
-		API->>Cache: store retrieval results
-	end
-	API->>Prompt: build Maxwell system + context
-	API->>Cache: lookup generation key
-	alt gen miss
-		API->>Gen: call model / stub
-		Gen-->>API: answer + citations
-		API->>Cache: store generation
-	end
-	API-->>Client: answer + citations + prompt
-```
-
-### Component Diagram
 ```mermaid
 graph TD
-	A[Client] --> B[Express API]
-	B -->|/ingest| C[Ingestion]
-	C --> D[Parser + Tagger]
-	D --> E[Embedder]
-	E --> F[Vector Store]
-	B -->|/generate| G[Retrieval Blend]
-	G --> F
-	G --> H[Reranker]
-	G --> I[LRU Retrieval Cache]
-	B --> J[Prompt Builder]
-	B --> K[Generation Module]
-	K --> L[LRU Generation Cache]
-	B --> M[Rate Limiter]
-	B --> N[Metrics]
-	B --> O[User Memory]
-	subgraph Storage
-		F
-		I
-		L
-		O
-	end
+    UI[Coaching UI\npublic/index.html] -->|SSE stream| API[Express API\nsrc/server.ts]
+    API --> Persona[Persona loader\nsrc/persona.ts]
+    API --> Prompt[Prompt builder\nsrc/prompt.ts]
+    API --> Gen[Generator\nsrc/generate.ts]
+    API --> Retrieve[Retrieval blend\nsrc/retrieve.ts]
+    Retrieve --> Embed[Embedder\nsrc/embed.ts]
+    Retrieve --> Vector[(Qdrant\nvector store)]
+    Embed --> OpenAI[(OpenAI\nembeddings)]
+    Gen --> OpenAI2[(OpenAI\nchat)]
+    Persona --> PersonaFile[data/persona/\njohn_persona_curated.md]
+    API --> Conv[Conversation store\nsrc/conversation.ts]
+    Conv --> Cache[.cache/\nconversations.json]
+    API --> Memory[User memory\nsrc/memory.ts]
+    API --> TTS[Voice synthesis\nsrc/voice.ts]
+    TTS --> HF[(Hugging Face\nInference API)]
+
+    subgraph Content
+        PersonaFile
+        Transcripts[data/transcripts/\n490 Maxwell segments]
+    end
 ```
 
-### Data Flow Summary
-1. Ingestion: Raw source (web/text/PDF) is normalized, cleaned, chunked with overlap, taxonomy-tagged.
-2. Indexing: Embeddings computed; chunks upserted into selected vector store.
-3. Retrieval: For a query, semantic candidates (topM) fetched; lexical overlap and tag signals combined with weights; optional reranker refines ordering; topK retained.
-4. Prompt: System + context with scores, tags, and chunk markers assembled.
-5. Generation: Chat model (or stub) produces answer; citations extracted from context/inline markers; streaming endpoint emits tokens.
-6. Caching: Retrieval & generation keyed by normalized parameters; avoids recomputation.
-7. Auth & Rate limiting: API key checked; token bucket enforced per key; metrics recorded.
-8. Metrics: Counters for requests, cache hits, rerank usage, rate limit denials.
+### Request flow
 
-## Notes
-- Replace LocalEmbedder with OpenAI/Qdrant/Pinecone implementations as needed.
-- Add Maxwell-specific topic taxonomy and scoring for “primary vs secondary” in prompt.ts and memory.ts.
+```mermaid
+sequenceDiagram
+    participant User
+    participant UI as Coaching UI
+    participant API as Express API
+    participant Vec as Qdrant
+    participant GPT as OpenAI
 
-### Pinecone setup
-### Retrieval evaluation
-### Parameter tuning
-Run grid search over retrieval weights (alpha=vector, beta=lexical, gamma=tags):
-```sh
-npm run eval:tune
+    User->>UI: Types message
+    UI->>API: POST /conversation/:id/stream
+    API->>Vec: Semantic + lexical + taxonomy search
+    Vec-->>API: Top-K chunks
+    API->>API: Build Maxwell system prompt\n(persona + profile + summary + context)
+    API->>GPT: Stream chat completion
+    GPT-->>API: Token stream
+    API-->>UI: SSE token events
+    UI-->>User: Text appears in real time
+    API->>API: Every 5 turns: generate coaching summary
 ```
-Update .env with best weights (RETRIEVE_ALPHA/BETA/GAMMA) and restart server.
 
-### PDF ingestion
-- Send a base64-encoded PDF in `pdfBase64` to /ingest.
-- Example (macOS):
+---
+
+## Transcript ingestion
+
+Transcripts in `data/transcripts/` are auto-ingested on server startup. To manually bulk-ingest against a running server:
+
 ```sh
-base64 mydoc.pdf | pbcopy
-# Paste into JSON body: { "pdfBase64": "<pasted>", "title": "My Doc" }
+npm run ingest:transcripts -- data/transcripts http://localhost:3000 <api-key>
 ```
-Keep PDFs within allowed usage rights. Text extraction strips excessive whitespace.
-Run the baseline retrieval evaluation (uses local embedder fallback if OpenAI key missing):
+
+The script is resumable — progress is saved to `.ingest_progress.json`.
+
+---
+
+## Voice (TTS)
+
+Set these in `.env` to enable the 🔊 voice button in the UI:
 
 ```sh
+HUGGINGFACE_API_TOKEN=hf_...
+HF_TTS_MODEL=parler-tts/parler-tts-large-v1
+HF_TTS_PARAMETERS={"description":"A warm, deep, authoritative male voice with Southern American accent speaks at a moderate, unhurried pace with confidence and gravitas. No background noise."}
+```
+
+Get a free token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). No GPU required — parler-tts runs on HF Inference API.
+
+---
+
+## Evaluation and tuning
+
+```sh
+# Baseline retrieval quality (recall, MRR)
 npm run eval:retrieval
+
+# Grid search over alpha/beta/gamma weights
+npm run eval:tune
+# → writes tuning_results.csv; update RETRIEVE_* in .env with best values
+
+# Structural QA — 6 scenarios, 25 checks (runs in stub mode)
+npm run qa
 ```
 
-Outputs JSON with avgRecall and MRR, plus per-query logs. Adjust scoring weights (alpha/beta/gamma via env) and re-run to tune.
- - Set VECTOR_DB=pinecone
- - Set PINECONE_API_KEY and PINECONE_INDEX_HOST (index-level host from Pinecone console)
- - The adapter uses REST against the index host; collection name is implicit and not used.
+---
 
-### Generation
+## Project structure
 
-The `/generate` endpoint performs retrieval (semantic + lexical + taxonomy weighting) and then builds a Maxwell-voiced prompt before calling the chat model.
-
-Request body:
 ```
-{
-	"query": "How can I develop leaders on my team?",
-	"userId": "coach123",
-	"topK": 5,
-	"temperature": 0.7,
-	"maxTokens": 400
-}
+src/
+  server.ts          Express API, auth, metrics, conversation/profile endpoints
+  prompt.ts          Maxwell system prompt, emotional detection, session arc
+  generate.ts        OpenAI generation, SSE streaming, citation handling
+  persona.ts         Persona file loader, relevance scoring, snippet injection
+  conversation.ts    Thread store, coaching summary, persistence
+  maxwell_taxonomy.ts  11 Maxwell topic categories for chunk tagging
+  embed.ts           Embedder implementations (OpenAI, local fallback)
+  retrieve.ts        Blended scoring: semantic + lexical + taxonomy + rerank
+  memory.ts          User preference memory and category decay
+  voice.ts           Hugging Face TTS synthesis
+  config.ts          Runtime config from env
+  ingest.ts          Web/text/PDF ingestion
+  parse.ts           Cleaning, chunking, tagging
+data/
+  transcripts/       490 Maxwell transcript segments (John1-000 … John5-059)
+  persona/
+    john_persona_curated.md   8 real Maxwell stories (source of truth)
+    john_persona_drafts.md    Raw extracted fragments (reference only)
+public/
+  index.html         Immersive coaching UI (onboarding, SSE streaming, avatar)
+scripts/
+  bulk_ingest_transcripts.ts   Resumable bulk ingestion
+  qa_conversation.ts           Structural QA test suite
+tests/
+  generate.stub.test.ts
+  utils.chunkText.test.ts
+  taxonomy.tagContent.test.ts
+  retrieval.scoring.test.ts
 ```
 
-Response:
+---
+
+## Running tests
+
+```sh
+npm test
 ```
-{
-	"prompt": "<assembled prompt including context chunks>",
-	"answer": "<Maxwell style coaching answer>"
-}
-```
 
-Environment variables influencing generation:
- - OPENAI_API_KEY (optional; if absent returns stub)
- - OPENAI_CHAT_MODEL (e.g. gpt-4o-mini)
- - RETRIEVE_ALPHA, RETRIEVE_BETA, RETRIEVE_GAMMA (weight semantic / lexical / tag scores)
+All 7 unit tests cover: stub generation, chunking, taxonomy tagging, and retrieval scoring.
 
-Current enhancements status:
-- Streaming responses (SSE) [implemented]
-- Inline citations with chunk IDs [implemented]
-- Cross-encoder pseudo reranker [implemented]
-- Caching layer [implemented]
-- Metrics & basic observability [implemented]
-- Rate limiting & API key auth [implemented]
-Upcoming roadmap:
-- Dynamic config endpoint
-- Personalization feedback loop
-- Chunk deduplication
-- Advanced evaluation dashboards
-- Audio ingestion (speech-to-text)
-- Architecture & developer docs expansion
+---
 
-### Streaming Generation (SSE)
+## Roadmap
 
-Endpoint: `POST /generate/stream`
-
-Starts with a `start` event delivering enriched citations and prompt metadata, then a sequence of `token` events, finally a `done` event.
-
-Example client (Node.js):
-```js
-const fetch = require('node-fetch');
-async function stream() {
-	const res = await fetch('http://localhost:3000/generate/stream', {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ query: 'How can I develop leaders?', topK: 5 })
-	});
-	res.body.on('data', chunk => process.stdout.write(chunk.toString()));
-}
-stream();
-```
-Events format (SSE lines):
-```
-event: start
-data: { ... prompt, citations }
-
-event: token
-data: { "token": "Leadership" }
-
-event: done
-data: {}
-```
-Tokens are a simple whitespace split of the full answer in this first version; replace with true streaming API later.
+- [ ] Add `OPENAI_API_KEY` for real semantic retrieval and Maxwell-voiced responses
+- [ ] Multi-session coaching memory (persist across browser sessions)
+- [ ] Analytics dashboard (which teachings resonate most)
+- [ ] Expand transcript corpus (Maxwell books, podcasts)
+- [ ] Feedback loop — users rate responses to improve retrieval weights
+- [ ] Audio ingestion pipeline (speech-to-text for new Maxwell content)

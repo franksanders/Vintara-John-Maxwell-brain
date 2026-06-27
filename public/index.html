@@ -1,330 +1,1527 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Maxwell Coach (PoC)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>John Maxwell — Personal Leadership Coach</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet" />
   <style>
-    body { font-family: -apple-system, system-ui, Segoe UI, Roboto, sans-serif; margin: 0; padding: 16px; }
-    #log { white-space: pre-wrap; font-size: 14px; }
-    .bubble { border-radius: 14px; padding: 10px 14px; margin: 8px 0; max-width: 90%; }
-    .user { background: #e3f2fd; align-self: flex-end; }
-    .assistant { background: #f1f8e9; }
-    #chat { display: flex; flex-direction: column; }
-    #row { display: flex; gap: 8px; position: fixed; bottom: 12px; left: 12px; right: 12px; z-index: 9999; background: #fff; padding: 8px; border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,0.12); }
-    #q { flex: 1; font-size: 16px; padding: 10px; }
-    #send, #voice { padding: 10px 14px; font-size: 16px; }
-    main { padding-bottom: 80px; }
-    .status { display: inline-block; margin-left: 8px; padding: 2px 8px; border-radius: 999px; font-size: 12px; vertical-align: middle; }
-    .live { background: #e8f5e9; color: #1b5e20; }
-    .offline { background: #ffebee; color: #b71c1c; }
-    .retry-btn { margin-left: 8px; font-size: 12px; padding: 4px 8px; border-radius: 8px; border: 1px solid #ccc; background: #fff; }
+    :root {
+      --forest: #1a3d2b;
+      --forest-soft: #24533b;
+      --forest-deep: #123021;
+      --gold: #c9a84c;
+      --gold-soft: #f5edcf;
+      --surface: #ffffff;
+      --surface-soft: #f7f6f2;
+      --surface-muted: #f1efe8;
+      --text: #19231d;
+      --text-soft: #5d685f;
+      --line: rgba(26, 61, 43, 0.12);
+      --shadow: 0 18px 48px rgba(16, 39, 28, 0.12);
+      --radius-xl: 24px;
+      --radius-lg: 18px;
+      --radius-md: 14px;
+      --radius-sm: 10px;
+      --header-height: 92px;
+      --input-height: 108px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #fbfaf6 0%, #ffffff 24%, #ffffff 100%);
+      color: var(--text);
+      overflow: hidden;
+    }
+
+    button, textarea, input { font: inherit; }
+    button { cursor: pointer; }
+
+    .app {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      background:
+        radial-gradient(circle at top right, rgba(201, 168, 76, 0.14), transparent 28%),
+        radial-gradient(circle at left 18%, rgba(26, 61, 43, 0.08), transparent 32%);
+    }
+
+    .topbar {
+      position: relative;
+      min-height: var(--header-height);
+      padding: calc(18px + env(safe-area-inset-top)) 20px 18px;
+      background: linear-gradient(180deg, var(--forest) 0%, var(--forest-deep) 100%);
+      color: #fff;
+      box-shadow: 0 10px 28px rgba(12, 27, 19, 0.22);
+      z-index: 20;
+    }
+
+    .topbar-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-family: "Playfair Display", Georgia, serif;
+      font-size: 1.75rem;
+      font-weight: 700;
+      line-height: 1;
+      letter-spacing: 0.01em;
+    }
+
+    .brand h1 span { color: var(--gold); }
+
+    .brand p {
+      margin: 8px 0 0;
+      font-size: 0.93rem;
+      color: rgba(255, 255, 255, 0.78);
+    }
+
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      font-size: 0.84rem;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .status-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #9ba79f;
+      box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.08);
+      flex: 0 0 auto;
+    }
+
+    .status-badge.live .status-dot {
+      background: #67dc84;
+      box-shadow: 0 0 0 4px rgba(103, 220, 132, 0.14);
+    }
+
+    .status-badge.local .status-dot { background: #9ba79f; }
+
+    .gear-btn {
+      width: 38px;
+      height: 38px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: rgba(255, 255, 255, 0.1);
+      color: #fff;
+      font-size: 1.05rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+    }
+
+    .gear-btn:hover { transform: rotate(12deg); background: rgba(255, 255, 255, 0.16); }
+
+    .settings-panel {
+      position: relative;
+      z-index: 19;
+      overflow: hidden;
+      max-height: 0;
+      opacity: 0;
+      transform: translateY(-10px);
+      transition: max-height 220ms ease, opacity 200ms ease, transform 200ms ease;
+      background: rgba(16, 39, 28, 0.96);
+      color: #fff;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .settings-panel.open {
+      max-height: 380px;
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .settings-inner {
+      padding: 18px 20px 20px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .settings-note {
+      margin: 0;
+      font-size: 0.92rem;
+      line-height: 1.5;
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .settings-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .field label {
+      display: block;
+      font-size: 0.82rem;
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: rgba(255, 255, 255, 0.78);
+    }
+
+    .field input,
+    .field textarea {
+      width: 100%;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff;
+      padding: 12px 14px;
+      outline: none;
+      resize: none;
+    }
+
+    .field input::placeholder,
+    .field textarea::placeholder { color: rgba(255, 255, 255, 0.42); }
+    .field input[readonly] { color: rgba(255, 255, 255, 0.68); }
+
+    .settings-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .inline-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .btn,
+    .btn-secondary,
+    .btn-link {
+      border: 0;
+      border-radius: 999px;
+      transition: transform 160ms ease, opacity 160ms ease, background 160ms ease;
+    }
+
+    .btn {
+      padding: 12px 18px;
+      background: var(--gold);
+      color: #1d261f;
+      font-weight: 700;
+      box-shadow: 0 10px 24px rgba(201, 168, 76, 0.24);
+    }
+
+    .btn:hover,
+    .composer-send:hover,
+    .onboarding-next:hover { transform: translateY(-1px); }
+
+    .btn-secondary {
+      padding: 11px 16px;
+      background: rgba(255, 255, 255, 0.1);
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      font-weight: 600;
+    }
+
+    .btn-link {
+      background: transparent;
+      color: rgba(255, 255, 255, 0.72);
+      padding: 0;
+      font-weight: 600;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .settings-status {
+      min-height: 1.2em;
+      font-size: 0.85rem;
+      color: rgba(255, 255, 255, 0.78);
+    }
+
+    .chat-wrap {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .chat {
+      height: 100%;
+      overflow-y: auto;
+      padding: 18px 16px calc(var(--input-height) + env(safe-area-inset-bottom) + 18px);
+      scroll-behavior: smooth;
+    }
+
+    .chat-inner {
+      width: min(100%, 920px);
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .message-row {
+      display: flex;
+      gap: 12px;
+      align-items: flex-end;
+      max-width: 100%;
+    }
+
+    .message-row.user {
+      justify-content: flex-end;
+    }
+
+    .message-row.assistant { justify-content: flex-start; }
+
+    .avatar {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: var(--forest);
+      color: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.8rem;
+      font-weight: 700;
+      flex: 0 0 auto;
+      box-shadow: 0 6px 14px rgba(26, 61, 43, 0.18);
+    }
+
+    .bubble-wrap {
+      max-width: min(100%, 760px);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .message-row.user .bubble-wrap { align-items: flex-end; }
+
+    .bubble {
+      position: relative;
+      padding: 14px 16px;
+      border-radius: 20px;
+      line-height: 1.55;
+      font-size: 0.98rem;
+      box-shadow: 0 8px 20px rgba(16, 39, 28, 0.05);
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+
+    .assistant .bubble {
+      background: #f5f5f5;
+      color: var(--text);
+      border-top-left-radius: 8px;
+    }
+
+    .user .bubble {
+      background: linear-gradient(180deg, var(--forest-soft) 0%, var(--forest) 100%);
+      color: #fff;
+      border-top-right-radius: 8px;
+    }
+
+    .bubble.error {
+      border: 1px solid rgba(167, 53, 53, 0.18);
+      background: #fff6f6;
+      color: #7a1f1f;
+    }
+
+    .bubble-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 4px;
+      color: var(--text-soft);
+      font-size: 0.77rem;
+    }
+
+    .message-row.user .bubble-meta {
+      justify-content: flex-end;
+      color: rgba(25, 35, 29, 0.62);
+    }
+
+    .speaker-btn {
+      width: 26px;
+      height: 26px;
+      border-radius: 999px;
+      border: 1px solid rgba(26, 61, 43, 0.08);
+      background: #fff;
+      color: var(--forest);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.86rem;
+      padding: 0;
+    }
+
+    .speaker-btn:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+      background: #f0f0f0;
+      color: #7d8780;
+    }
+
+    .retry-button {
+      margin-top: 10px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(122, 31, 31, 0.16);
+      background: #fff;
+      color: #7a1f1f;
+      font-size: 0.84rem;
+      font-weight: 600;
+    }
+
+    .typing {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 13px 14px;
+      border-radius: 18px;
+      border-top-left-radius: 8px;
+      background: #f5f5f5;
+      box-shadow: 0 8px 20px rgba(16, 39, 28, 0.05);
+    }
+
+    .typing span {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: rgba(26, 61, 43, 0.45);
+      animation: pulse 1s infinite ease-in-out;
+    }
+
+    .typing span:nth-child(2) { animation-delay: 0.15s; }
+    .typing span:nth-child(3) { animation-delay: 0.3s; }
+
+    @keyframes pulse {
+      0%, 80%, 100% { transform: scale(0.72); opacity: 0.45; }
+      40% { transform: scale(1); opacity: 1; }
+    }
+
+    .date-separator {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: rgba(25, 35, 29, 0.52);
+      font-size: 0.78rem;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      margin: 4px 0;
+    }
+
+    .date-separator::before,
+    .date-separator::after {
+      content: "";
+      height: 1px;
+      flex: 1;
+      background: linear-gradient(90deg, transparent, rgba(25, 35, 29, 0.16), transparent);
+    }
+
+    .empty-state {
+      margin: auto;
+      width: min(100%, 720px);
+      padding: 34px 26px;
+      text-align: center;
+      border-radius: 28px;
+      background: rgba(255, 255, 255, 0.82);
+      border: 1px solid rgba(26, 61, 43, 0.08);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(16px);
+    }
+
+    .empty-state h2 {
+      margin: 0 0 12px;
+      font-family: "Playfair Display", Georgia, serif;
+      font-size: 1.7rem;
+      color: var(--forest);
+    }
+
+    .empty-state p {
+      margin: 0;
+      color: var(--text-soft);
+      line-height: 1.7;
+    }
+
+    .composer {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 18;
+      padding: 10px 16px calc(12px + env(safe-area-inset-bottom));
+      background: linear-gradient(180deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.95) 24%, #ffffff 60%);
+      backdrop-filter: blur(10px);
+    }
+
+    .composer-inner {
+      width: min(100%, 920px);
+      margin: 0 auto;
+      padding: 10px;
+      border-radius: 24px;
+      border: 1px solid rgba(26, 61, 43, 0.1);
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: 0 18px 40px rgba(16, 39, 28, 0.1);
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+    }
+
+    .composer textarea {
+      flex: 1;
+      min-height: 54px;
+      max-height: 132px;
+      border: 0;
+      outline: none;
+      resize: none;
+      background: transparent;
+      color: var(--text);
+      padding: 10px 12px;
+      line-height: 1.45;
+    }
+
+    .composer textarea::placeholder { color: #8a948e; }
+
+    .composer-send {
+      flex: 0 0 auto;
+      min-width: 116px;
+      height: 52px;
+      border: 0;
+      border-radius: 18px;
+      padding: 0 18px;
+      background: linear-gradient(180deg, var(--forest-soft) 0%, var(--forest) 100%);
+      color: #fff;
+      font-weight: 700;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      box-shadow: 0 12px 28px rgba(26, 61, 43, 0.2);
+    }
+
+    .composer-send:disabled,
+    .composer textarea:disabled {
+      opacity: 0.66;
+      cursor: not-allowed;
+    }
+
+    .composer-hint {
+      width: min(100%, 920px);
+      margin: 8px auto 0;
+      padding: 0 8px;
+      color: rgba(25, 35, 29, 0.58);
+      font-size: 0.78rem;
+    }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      padding: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(10, 24, 17, 0.44);
+      backdrop-filter: blur(12px);
+      transition: opacity 260ms ease, transform 260ms ease;
+    }
+
+    .overlay.dismissed {
+      opacity: 0;
+      transform: translateY(-18px);
+      pointer-events: none;
+    }
+
+    .onboarding-card {
+      width: min(100%, 520px);
+      padding: 28px 24px 22px;
+      border-radius: 28px;
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: 0 28px 60px rgba(13, 30, 21, 0.2);
+      border: 1px solid rgba(26, 61, 43, 0.08);
+    }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      color: var(--gold);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-size: 0.76rem;
+      font-weight: 700;
+    }
+
+    .onboarding-card h2 {
+      margin: 0;
+      font-family: "Playfair Display", Georgia, serif;
+      font-size: 2rem;
+      color: var(--forest);
+      line-height: 1.08;
+    }
+
+    .onboarding-card p {
+      margin: 14px 0 0;
+      color: var(--text-soft);
+      line-height: 1.65;
+    }
+
+    .progress {
+      margin: 22px 0 24px;
+      height: 8px;
+      border-radius: 999px;
+      background: #ece8da;
+      overflow: hidden;
+    }
+
+    .progress-bar {
+      height: 100%;
+      width: 33.333%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--gold) 0%, #dbc174 100%);
+      transition: width 220ms ease;
+    }
+
+    .step-count {
+      margin: 0 0 10px;
+      color: rgba(25, 35, 29, 0.56);
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+
+    .onboarding-field {
+      margin-top: 22px;
+    }
+
+    .onboarding-field label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .onboarding-field input,
+    .onboarding-field textarea {
+      width: 100%;
+      border-radius: 18px;
+      border: 1px solid rgba(26, 61, 43, 0.14);
+      background: #fff;
+      color: var(--text);
+      padding: 15px 16px;
+      outline: none;
+      resize: none;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,0.02);
+    }
+
+    .onboarding-field textarea {
+      min-height: 120px;
+      line-height: 1.5;
+    }
+
+    .onboarding-field input:focus,
+    .onboarding-field textarea:focus,
+    .field input:focus,
+    .composer textarea:focus {
+      border-color: rgba(201, 168, 76, 0.88);
+      box-shadow: 0 0 0 4px rgba(201, 168, 76, 0.16);
+    }
+
+    .onboarding-actions {
+      margin-top: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .onboarding-left,
+    .onboarding-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .onboarding-back,
+    .onboarding-skip {
+      background: transparent;
+      border: 0;
+      padding: 0;
+      color: var(--text-soft);
+      font-weight: 600;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .onboarding-next {
+      padding: 13px 18px;
+      border: 0;
+      border-radius: 999px;
+      background: linear-gradient(180deg, var(--forest-soft) 0%, var(--forest) 100%);
+      color: #fff;
+      font-weight: 700;
+      min-width: 126px;
+      box-shadow: 0 14px 28px rgba(26, 61, 43, 0.22);
+    }
+
+    .onboarding-error {
+      min-height: 1.2em;
+      margin-top: 12px;
+      font-size: 0.84rem;
+      color: #a73535;
+    }
+
+    .hidden { display: none !important; }
+
+    @media (min-width: 768px) {
+      .topbar { padding-left: 28px; padding-right: 28px; }
+      .settings-inner { padding-left: 28px; padding-right: 28px; }
+      .chat { padding-left: 24px; padding-right: 24px; }
+      .composer { padding-left: 24px; padding-right: 24px; }
+      .settings-grid {
+        grid-template-columns: minmax(0, 1fr) minmax(220px, 260px);
+        align-items: end;
+      }
+    }
   </style>
 </head>
 <body>
-  <main>
-  <h2>Maxwell Coach (PoC) <span id="status" class="status offline">Offline</span></h2>
-    <div style="margin: 8px 0;">
-      <input id="apiKey" placeholder="API Key" style="width: 60%; padding: 8px;" />
-      <button id="saveKey" style="padding: 8px 12px;">Save Key</button>
-      <small id="keyStatus" style="margin-left:8px; color:#555;"></small>
-      <button id="start" style="margin-left:12px; padding:8px 12px;">Start Chat</button>
+  <div class="app">
+    <header class="topbar">
+      <div class="topbar-row">
+        <div class="brand">
+          <h1>John <span>Maxwell</span></h1>
+          <p>Leadership Coach</p>
+        </div>
+        <div class="topbar-actions">
+          <div id="statusBadge" class="status-badge local" aria-live="polite">
+            <span class="status-dot"></span>
+            <span id="statusLabel">Local</span>
+          </div>
+          <button id="settingsToggle" class="gear-btn" type="button" aria-label="Open settings">⚙️</button>
+        </div>
+      </div>
+    </header>
+
+    <section id="settingsPanel" class="settings-panel" aria-hidden="true">
+      <div class="settings-inner">
+        <p class="settings-note">Developer settings live here only. If your backend expects an <code>x-api-key</code>, paste it below. It stays in this browser and never appears in the main coaching experience.</p>
+        <div class="settings-grid">
+          <div class="field">
+            <label for="apiKeyInput">API key</label>
+            <input id="apiKeyInput" type="password" autocomplete="off" placeholder="Paste your backend API key" />
+          </div>
+          <div class="field">
+            <label for="userIdView">Session identity</label>
+            <input id="userIdView" type="text" readonly />
+          </div>
+        </div>
+        <div class="settings-actions">
+          <div class="inline-actions">
+            <button id="saveSettings" class="btn" type="button">Save settings</button>
+            <button id="clearSession" class="btn-secondary" type="button">Clear session</button>
+          </div>
+          <div id="settingsStatus" class="settings-status" aria-live="polite"></div>
+        </div>
+        <hr style="border:none;border-top:1px solid rgba(255,255,255,0.12);margin:20px 0;" />
+        <p class="settings-note" style="margin-bottom:8px;"><strong style="color:#c9a84c;">Voice (Text-to-Speech)</strong></p>
+        <p class="settings-note" id="voiceStatusNote">Voice is not configured on this server. To enable Maxwell's voice, set <code>HUGGINGFACE_API_TOKEN</code> and <code>HF_TTS_MODEL=parler-tts/parler-tts-large-v1</code> in your <code>.env</code> file, then restart the server.</p>
+        <p class="settings-note" id="voiceReadyNote" style="display:none;color:#a8d5b5;">Voice is configured. Each response includes a 🔊 button to hear it read aloud.</p>
+      </div>
+    </section>
+
+    <main class="chat-wrap">
+      <div id="chat" class="chat" aria-live="polite">
+        <div class="chat-inner" id="chatInner">
+          <section class="empty-state" id="emptyState">
+            <h2>A private place to think out loud.</h2>
+            <p>Bring the leadership challenge that feels most urgent, nuanced, or personal. This space is designed to help you slow down, get honest, and move forward with clarity.</p>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <div id="composer" class="composer">
+      <div class="composer-inner">
+        <textarea id="messageInput" rows="1" placeholder="Share what’s weighing on you, where you feel stuck, or what decision you need to make…" aria-label="Message John Maxwell"></textarea>
+        <button id="sendButton" class="composer-send" type="button">
+          <span id="sendLabel">Send</span>
+          <span aria-hidden="true">→</span>
+        </button>
+      </div>
+      <div class="composer-hint">Press Enter to send • Shift+Enter for a new line</div>
     </div>
-    <div style="margin: 8px 0; display:flex; gap:8px; flex-wrap: wrap; align-items: center;">
-      <input id="userId" placeholder="User ID (any stable string)" style="padding:8px; min-width: 180px;" />
-      <input id="firstName" placeholder="First name" style="padding:8px; min-width: 140px;" />
-      <input id="regionName" placeholder="City, State (optional)" style="padding:8px; min-width: 180px;" />
-      <button id="saveProfile" style="padding:8px 12px;">Save Profile</button>
-      <small id="profileStatus" style="color:#555;"></small>
+
+    <div id="onboarding" class="overlay" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle">
+      <div class="onboarding-card">
+        <p class="eyebrow">Welcome</p>
+        <div class="step-count" id="stepCount">Step 1 of 3</div>
+        <h2 id="onboardingTitle">What should John call you?</h2>
+        <p id="onboardingBody">A little context helps the coaching feel human from the very first message.</p>
+        <div class="progress" aria-hidden="true"><div id="progressBar" class="progress-bar"></div></div>
+        <div class="onboarding-field">
+          <label id="onboardingLabel" for="onboardingInput">Your first name</label>
+          <input id="onboardingInput" type="text" placeholder="e.g. Maya" maxlength="40" autocomplete="given-name" />
+          <textarea id="onboardingTextarea" class="hidden" placeholder="Describe the challenge that’s most important to you right now"></textarea>
+        </div>
+        <div id="onboardingError" class="onboarding-error" aria-live="polite"></div>
+        <div class="onboarding-actions">
+          <div class="onboarding-left">
+            <button id="onboardingBack" class="onboarding-back hidden" type="button">Back</button>
+            <button id="onboardingSkip" class="onboarding-skip" type="button">Skip for now</button>
+          </div>
+          <div class="onboarding-right">
+            <button id="onboardingNext" class="onboarding-next" type="button">Continue</button>
+          </div>
+        </div>
+      </div>
     </div>
-    <div style="margin: 6px 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-      <label for="preset" style="font-size: 14px;">Voice preset:</label>
-      <select id="preset" style="padding: 6px 8px;">
-        <option value="v2/en_speaker_6">en_speaker_6 (male)</option>
-        <option value="v2/en_speaker_3">en_speaker_3 (male)</option>
-        <option value="v2/en_speaker_9">en_speaker_9 (male)</option>
-        <option value="v2/en_speaker_1">en_speaker_1 (neutral)</option>
-      </select>
-      <button id="testVoice" style="padding: 6px 10px; font-size: 14px;">Test Voice</button>
-  <input id="speakerWav" placeholder="speaker_wav URL (https://... or /voices/john.wav)" style="flex:1; min-width: 200px; padding:6px 8px;" />
-    </div>
-    <div id="chat"></div>
-  </main>
-  <div id="row">
-    <input id="q" placeholder="Ask something..." />
-    <button id="send">Send</button>
-    <button id="voice">Voice</button>
   </div>
+
   <script>
-  let threadId = null;
-  let lastQueryText = '';
-    const chat = document.getElementById('chat');
-    const q = document.getElementById('q');
-    const sendBtn = document.getElementById('send');
-  const voiceBtn = document.getElementById('voice');
-  const presetSel = document.getElementById('preset');
-  const apiKeyInput = document.getElementById('apiKey');
-  const saveKeyBtn = document.getElementById('saveKey');
-  const startBtn = document.getElementById('start');
-  const statusBadge = document.getElementById('status');
-  const testVoiceBtn = document.getElementById('testVoice');
-  const speakerWavInput = document.getElementById('speakerWav');
-    const keyStatus = document.getElementById('keyStatus');
-  const userIdInput = document.getElementById('userId');
-  const firstNameInput = document.getElementById('firstName');
-  const regionNameInput = document.getElementById('regionName');
-  const saveProfileBtn = document.getElementById('saveProfile');
-  const profileStatus = document.getElementById('profileStatus');
+    const STORAGE = {
+      apiKey: 'jm_api_key',
+      profile: 'jm_profile',
+      userId: 'jm_user_id',
+      thread: 'jm_thread',
+      messages: 'jm_messages',
+      resumeAt: 'jm_resume_at'
+    };
 
-  function getUserId() { return localStorage.getItem('userId') || ''; }
-  function setUserId(v){ localStorage.setItem('userId', v || ''); }
-  function profileMsg(t,c){ profileStatus.textContent=t; profileStatus.style.color=c||'#555'; }
+    const state = {
+      apiKey: '',
+      userId: '',
+      profile: null,
+      threadId: null,
+      messages: [],
+      voiceConfigured: false,
+      mode: 'local',
+      isSending: false,
+      typingEl: null,
+      lastQuery: '',
+      onboardingStep: 0
+    };
 
-    function getApiKey() { return localStorage.getItem('apiKey') || ''; }
-    function setApiKey(key) { localStorage.setItem('apiKey', key || ''); }
-    function setStatus(text, color) { keyStatus.textContent = text; keyStatus.style.color = color || '#555'; }
-    async function validateKey() {
-      const k = getApiKey();
-      if (!k) { setStatus('No key saved', '#555'); return; }
-      setStatus('Validating…', '#555');
+    const steps = [
+      {
+        title: 'What should John call you?',
+        body: 'A little context helps the coaching feel human from the very first message.',
+        label: 'Your first name',
+        placeholder: 'e.g. Maya',
+        key: 'firstName',
+        type: 'input',
+        button: 'Continue'
+      },
+      {
+        title: 'What role are you carrying right now?',
+        body: 'This helps shape the language, pressure, and stakes around your decisions.',
+        label: 'Your current role',
+        placeholder: 'e.g. CEO, Team Lead, Entrepreneur',
+        key: 'role',
+        type: 'input',
+        button: 'Continue'
+      },
+      {
+        title: 'What challenge most needs a breakthrough?',
+        body: 'Name the one leadership tension that would make this conversation immediately valuable.',
+        label: 'Your current challenge',
+        placeholder: 'Describe the challenge that’s most important to you right now',
+        key: 'currentChallenge',
+        type: 'textarea',
+        button: 'Start coaching'
+      }
+    ];
+
+    const els = {
+      chat: document.getElementById('chat'),
+      chatInner: document.getElementById('chatInner'),
+      emptyState: document.getElementById('emptyState'),
+      statusBadge: document.getElementById('statusBadge'),
+      statusLabel: document.getElementById('statusLabel'),
+      settingsToggle: document.getElementById('settingsToggle'),
+      settingsPanel: document.getElementById('settingsPanel'),
+      settingsStatus: document.getElementById('settingsStatus'),
+      apiKeyInput: document.getElementById('apiKeyInput'),
+      userIdView: document.getElementById('userIdView'),
+      saveSettings: document.getElementById('saveSettings'),
+      clearSession: document.getElementById('clearSession'),
+      messageInput: document.getElementById('messageInput'),
+      sendButton: document.getElementById('sendButton'),
+      sendLabel: document.getElementById('sendLabel'),
+      onboarding: document.getElementById('onboarding'),
+      stepCount: document.getElementById('stepCount'),
+      onboardingTitle: document.getElementById('onboardingTitle'),
+      onboardingBody: document.getElementById('onboardingBody'),
+      progressBar: document.getElementById('progressBar'),
+      onboardingLabel: document.getElementById('onboardingLabel'),
+      onboardingInput: document.getElementById('onboardingInput'),
+      onboardingTextarea: document.getElementById('onboardingTextarea'),
+      onboardingBack: document.getElementById('onboardingBack'),
+      onboardingSkip: document.getElementById('onboardingSkip'),
+      onboardingNext: document.getElementById('onboardingNext'),
+      onboardingError: document.getElementById('onboardingError')
+    };
+
+    function loadJSON(storage, key) {
       try {
-        // Use a protected endpoint with no side effects to validate (GET /memory)
-        const r = await fetch('/memory', { headers: { 'x-api-key': k } });
-        if (r.ok) {
-          setStatus('Key valid', 'green');
-          // Show a welcome hint if no messages yet
-          if (!chat.querySelector('.bubble')) {
-            addBubble('Welcome! Type a question below and tap Send.', 'assistant');
+        const value = storage.getItem(key);
+        return value ? JSON.parse(value) : null;
+      } catch {
+        return null;
+      }
+    }
+
+    function saveJSON(storage, key, value) {
+      storage.setItem(key, JSON.stringify(value));
+    }
+
+    function generateUserId() {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        return 'jm_' + window.crypto.randomUUID();
+      }
+      return 'jm_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    }
+
+    function getOrCreateUserId() {
+      const existing = localStorage.getItem(STORAGE.userId);
+      if (existing) return existing;
+      const created = generateUserId();
+      localStorage.setItem(STORAGE.userId, created);
+      return created;
+    }
+
+    function headers(includeJson = true) {
+      const out = {};
+      if (includeJson) out['Content-Type'] = 'application/json';
+      if (state.apiKey) out['x-api-key'] = state.apiKey;
+      return out;
+    }
+
+    function setMode(model) {
+      const live = model && model !== 'stub-local';
+      state.mode = live ? 'live' : 'local';
+      els.statusBadge.classList.toggle('live', live);
+      els.statusBadge.classList.toggle('local', !live);
+      els.statusLabel.textContent = live ? 'Live' : 'Local';
+    }
+
+    function setSettingsStatus(message, tone) {
+      els.settingsStatus.textContent = message || '';
+      els.settingsStatus.style.color = tone || 'rgba(255,255,255,0.78)';
+    }
+
+    function openSettings(force = false) {
+      if (force || !els.settingsPanel.classList.contains('open')) {
+        els.settingsPanel.classList.add('open');
+        els.settingsPanel.setAttribute('aria-hidden', 'false');
+      }
+    }
+
+    function closeSettings() {
+      els.settingsPanel.classList.remove('open');
+      els.settingsPanel.setAttribute('aria-hidden', 'true');
+    }
+
+    function toggleSettings() {
+      if (els.settingsPanel.classList.contains('open')) closeSettings();
+      else openSettings(true);
+    }
+
+    function formatTime(timestamp) {
+      return new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' }).format(new Date(timestamp));
+    }
+
+    function formatResumeStamp(timestamp) {
+      return new Intl.DateTimeFormat([], {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit'
+      }).format(new Date(timestamp));
+    }
+
+    function scrollToBottom() {
+      requestAnimationFrame(() => {
+        els.chat.scrollTop = els.chat.scrollHeight;
+      });
+    }
+
+    function autosizeTextarea() {
+      els.messageInput.style.height = 'auto';
+      const next = Math.min(els.messageInput.scrollHeight, 132);
+      els.messageInput.style.height = next + 'px';
+    }
+
+    function persistMessages() {
+      saveJSON(sessionStorage, STORAGE.messages, state.messages);
+      sessionStorage.setItem(STORAGE.resumeAt, String(Date.now()));
+    }
+
+    function removeEmptyState() {
+      if (els.emptyState) {
+        els.emptyState.remove();
+      }
+    }
+
+    function createDateSeparator(text) {
+      removeEmptyState();
+      const div = document.createElement('div');
+      div.className = 'date-separator';
+      div.textContent = text;
+      els.chatInner.appendChild(div);
+      scrollToBottom();
+    }
+
+    function createSpeakerButton(text) {
+      const btn = document.createElement('button');
+      btn.className = 'speaker-btn';
+      btn.type = 'button';
+      btn.textContent = '🔊';
+      btn.disabled = !state.voiceConfigured;
+      btn.title = state.voiceConfigured ? 'Play audio' : 'Text-to-speech is not configured';
+      btn.addEventListener('click', () => speakMessage(text));
+      return btn;
+    }
+
+    function refreshSpeakerButtons() {
+      document.querySelectorAll('.speaker-btn').forEach((button) => {
+        button.disabled = !state.voiceConfigured;
+        button.title = state.voiceConfigured ? 'Play audio' : 'Text-to-speech is not configured';
+      });
+    }
+
+    function appendRetryButton(container, query) {
+      const button = document.createElement('button');
+      button.className = 'retry-button';
+      button.type = 'button';
+      button.textContent = 'Retry';
+      button.addEventListener('click', () => sendMessage(query, { retry: true }));
+      container.appendChild(button);
+    }
+
+    function renderMessage(message) {
+      removeEmptyState();
+      const row = document.createElement('div');
+      row.className = `message-row ${message.role}`;
+
+      if (message.role === 'assistant') {
+        const avatar = document.createElement('div');
+        avatar.className = 'avatar';
+        avatar.textContent = 'JM';
+        row.appendChild(avatar);
+      }
+
+      const wrap = document.createElement('div');
+      wrap.className = 'bubble-wrap';
+
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble' + (message.error ? ' error' : '');
+      bubble.textContent = message.content;
+      wrap.appendChild(bubble);
+
+      const meta = document.createElement('div');
+      meta.className = 'bubble-meta';
+      const time = document.createElement('span');
+      time.textContent = formatTime(message.timestamp || Date.now());
+      meta.appendChild(time);
+
+      if (message.role === 'assistant') {
+        meta.appendChild(createSpeakerButton(message.content));
+      }
+
+      wrap.appendChild(meta);
+
+      if (message.error && message.query) {
+        appendRetryButton(bubble, message.query);
+      }
+
+      row.appendChild(wrap);
+      els.chatInner.appendChild(row);
+      scrollToBottom();
+      return { row, bubble, meta };
+    }
+
+    function addMessage(role, content, extra = {}) {
+      const message = { role, content, timestamp: Date.now(), ...extra };
+      state.messages.push(message);
+      renderMessage(message);
+      persistMessages();
+      return message;
+    }
+
+    function renderStoredMessages() {
+      if (!state.messages.length) return;
+      removeEmptyState();
+      const resumedAt = Number(sessionStorage.getItem(STORAGE.resumeAt) || 0);
+      if (resumedAt) {
+        createDateSeparator(`Resumed ${formatResumeStamp(resumedAt)}`);
+      }
+      for (const message of state.messages) {
+        renderMessage(message);
+      }
+    }
+
+    function showTyping() {
+      hideTyping();
+      removeEmptyState();
+      const row = document.createElement('div');
+      row.className = 'message-row assistant';
+
+      const avatar = document.createElement('div');
+      avatar.className = 'avatar';
+      avatar.textContent = 'JM';
+      row.appendChild(avatar);
+
+      const typing = document.createElement('div');
+      typing.className = 'typing';
+      typing.innerHTML = '<span></span><span></span><span></span>';
+      row.appendChild(typing);
+
+      state.typingEl = row;
+      els.chatInner.appendChild(row);
+      scrollToBottom();
+    }
+
+    function hideTyping() {
+      if (state.typingEl) {
+        state.typingEl.remove();
+        state.typingEl = null;
+      }
+    }
+
+    function setComposerBusy(busy) {
+      state.isSending = busy;
+      els.messageInput.disabled = busy;
+      els.sendButton.disabled = busy;
+      els.sendLabel.textContent = busy ? 'Connecting…' : 'Send';
+      if (!busy) {
+        els.messageInput.focus();
+      }
+    }
+
+    async function speakMessage(text) {
+      if (!state.voiceConfigured || !text) return;
+      try {
+        const response = await fetch('/tts', {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify({ text, format: 'mp3', parameters: { language: 'en' } })
+        });
+        if (!response.ok) throw new Error('Unable to play audio right now.');
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.addEventListener('ended', () => URL.revokeObjectURL(url), { once: true });
+        await audio.play();
+      } catch (error) {
+        addMessage('assistant', error.message || 'Unable to play audio right now.', { error: true, query: text });
+      }
+    }
+
+    function updateSettingsUI() {
+      els.apiKeyInput.value = state.apiKey;
+      els.userIdView.value = state.userId;
+    }
+
+    async function fetchHealth() {
+      try {
+        const response = await fetch('/health');
+        if (!response.ok) return;
+        const data = await response.json();
+        state.voiceConfigured = !!data.voiceConfigured;
+      } catch {
+        state.voiceConfigured = false;
+      }
+      refreshSpeakerButtons();
+      // Update settings panel voice notes
+      const noteOff = document.getElementById('voiceStatusNote');
+      const noteOn = document.getElementById('voiceReadyNote');
+      if (noteOff && noteOn) {
+        noteOff.style.display = state.voiceConfigured ? 'none' : '';
+        noteOn.style.display = state.voiceConfigured ? '' : 'none';
+      }
+    }
+
+    async function saveProfile(profile) {
+      localStorage.setItem(STORAGE.profile, JSON.stringify(profile));
+      state.profile = profile;
+      try {
+        await fetch('/profile', {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify(profile)
+        });
+      } catch {}
+    }
+
+    async function startConversation(profileOverride) {
+      if (state.threadId) return state.threadId;
+      const payload = {
+        userId: state.userId,
+        profile: profileOverride || state.profile || undefined
+      };
+
+      const response = await fetch('/conversation/start', {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const errorText = response.status === 401 || response.status === 403
+          ? 'Your backend needs an API key before the conversation can begin. Open settings to add it.'
+          : 'I couldn’t start the coaching session just yet. Please try again.';
+        setSettingsStatus(errorText, '#ffd2d2');
+        openSettings(true);
+        throw new Error(errorText);
+      }
+
+      const data = await response.json();
+      state.threadId = data.id;
+      sessionStorage.setItem(STORAGE.thread, state.threadId);
+
+      if (data.openingMessage && state.messages.length === 0) {
+        addMessage('assistant', data.openingMessage);
+      }
+
+      return state.threadId;
+    }
+
+    async function clearSession() {
+      sessionStorage.removeItem(STORAGE.thread);
+      sessionStorage.removeItem(STORAGE.messages);
+      sessionStorage.removeItem(STORAGE.resumeAt);
+      state.threadId = null;
+      state.messages = [];
+      els.chatInner.innerHTML = '';
+      els.chatInner.appendChild(els.emptyState);
+      setMode('stub-local');
+      setSettingsStatus('Session cleared. Starting fresh…');
+      try {
+        await startConversation(state.profile || undefined);
+        setSettingsStatus('Fresh conversation ready.', '#c8f0cf');
+      } catch (error) {
+        setSettingsStatus(error.message || 'Session cleared. Add your API key to reconnect.', '#ffd2d2');
+      }
+    }
+
+    function setOnboardingError(message) {
+      els.onboardingError.textContent = message || '';
+    }
+
+    function updateOnboardingUI() {
+      const step = steps[state.onboardingStep];
+      els.stepCount.textContent = `Step ${state.onboardingStep + 1} of ${steps.length}`;
+      els.onboardingTitle.textContent = step.title;
+      els.onboardingBody.textContent = step.body;
+      els.onboardingLabel.textContent = step.label;
+      els.onboardingNext.textContent = step.button;
+      els.onboardingBack.classList.toggle('hidden', state.onboardingStep === 0);
+      els.progressBar.style.width = `${((state.onboardingStep + 1) / steps.length) * 100}%`;
+      setOnboardingError('');
+
+      if (step.type === 'input') {
+        els.onboardingInput.classList.remove('hidden');
+        els.onboardingTextarea.classList.add('hidden');
+        els.onboardingInput.placeholder = step.placeholder;
+        els.onboardingInput.value = (state.profile && state.profile[step.key]) || '';
+        els.onboardingInput.focus();
+      } else {
+        els.onboardingInput.classList.add('hidden');
+        els.onboardingTextarea.classList.remove('hidden');
+        els.onboardingTextarea.placeholder = step.placeholder;
+        els.onboardingTextarea.value = (state.profile && state.profile[step.key]) || '';
+        els.onboardingTextarea.focus();
+      }
+    }
+
+    function getOnboardingValue() {
+      const step = steps[state.onboardingStep];
+      return step.type === 'input'
+        ? els.onboardingInput.value.trim()
+        : els.onboardingTextarea.value.trim();
+    }
+
+    function setOnboardingValue(value) {
+      const step = steps[state.onboardingStep];
+      state.profile = state.profile || { userId: state.userId };
+      state.profile[step.key] = value;
+    }
+
+    async function finishOnboarding(skipped = false) {
+      if (skipped) {
+        state.profile = null;
+        localStorage.removeItem(STORAGE.profile);
+      } else if (state.profile) {
+        state.profile.userId = state.userId;
+        state.profile.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        state.profile.locale = navigator.language;
+        await saveProfile(state.profile);
+      }
+
+      els.onboarding.classList.add('dismissed');
+      setTimeout(() => {
+        els.onboarding.classList.add('hidden');
+      }, 260);
+
+      try {
+        await startConversation(skipped ? undefined : state.profile);
+      } catch (error) {
+        addMessage('assistant', error.message || 'I couldn’t start the conversation yet.', { error: true });
+      }
+    }
+
+    async function handleOnboardingNext() {
+      const value = getOnboardingValue();
+      const step = steps[state.onboardingStep];
+
+      if (!value) {
+        setOnboardingError(step.key === 'currentChallenge'
+          ? 'Give John one real challenge to work on, or choose “Skip for now.”'
+          : 'Please add a response, or choose “Skip for now.”');
+        return;
+      }
+
+      setOnboardingValue(value);
+
+      if (state.onboardingStep < steps.length - 1) {
+        state.onboardingStep += 1;
+        updateOnboardingUI();
+        return;
+      }
+
+      await finishOnboarding(false);
+    }
+
+    async function ensureConversation() {
+      if (state.threadId) return state.threadId;
+      return startConversation(state.profile || undefined);
+    }
+
+    function parseSseBlock(block) {
+      const lines = block.split(/\r?\n/);
+      let event = 'message';
+      const data = [];
+      for (const line of lines) {
+        if (line.startsWith('event:')) event = line.slice(6).trim();
+        if (line.startsWith('data:')) data.push(line.slice(5).trim());
+      }
+      const raw = data.join('\n');
+      let parsed = raw;
+      try {
+        parsed = raw ? JSON.parse(raw) : {};
+      } catch {}
+      return { event, data: parsed };
+    }
+
+    async function streamReply(query) {
+      await ensureConversation();
+      const response = await fetch(`/conversation/${state.threadId}/stream`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ query, temperature: 0.82 })
+      });
+
+      if (!response.ok || !response.body) {
+        const message = response.status === 401 || response.status === 403
+          ? 'Your backend needs an API key before John can respond. Open settings to add it.'
+          : 'The connection dropped before John could respond.';
+        throw new Error(message);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let currentText = '';
+      let currentRender = null;
+      let doneSeen = false;
+
+      showTyping();
+
+      const handleEvent = ({ event, data }) => {
+        if (event === 'start') {
+          hideTyping();
+          currentText = '';
+          currentRender = renderMessage({ role: 'assistant', content: '', timestamp: Date.now() });
+          if (data && data.model) setMode(data.model);
+          if (data && data.userId && !localStorage.getItem(STORAGE.userId)) {
+            localStorage.setItem(STORAGE.userId, data.userId);
+          }
+          return;
+        }
+
+        if (event === 'token') {
+          if (!currentRender) {
+            hideTyping();
+            currentRender = renderMessage({ role: 'assistant', content: '', timestamp: Date.now() });
+          }
+          currentText += data.token || '';
+          currentRender.bubble.textContent = currentText;
+          const speaker = currentRender.meta.querySelector('.speaker-btn');
+          if (speaker) speaker.replaceWith(createSpeakerButton(currentText));
+          scrollToBottom();
+          return;
+        }
+
+        if (event === 'done') {
+          doneSeen = true;
+          hideTyping();
+          const finalMessage = { role: 'assistant', content: currentText.trim() || ' ', timestamp: Date.now() };
+          state.messages.push(finalMessage);
+          persistMessages();
+          return;
+        }
+
+        if (event === 'error') {
+          throw new Error(data && data.message ? data.message : 'Streaming failed.');
+        }
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+        let boundary = buffer.indexOf('\n\n');
+        while (boundary !== -1) {
+          const block = buffer.slice(0, boundary).trim();
+          buffer = buffer.slice(boundary + 2);
+          if (block) handleEvent(parseSseBlock(block));
+          boundary = buffer.indexOf('\n\n');
+        }
+        if (done) break;
+      }
+
+      const tail = buffer.trim();
+      if (tail) handleEvent(parseSseBlock(tail));
+      if (!doneSeen && currentText) {
+        state.messages.push({ role: 'assistant', content: currentText.trim(), timestamp: Date.now() });
+        persistMessages();
+      }
+    }
+
+    async function sendMessage(raw, options = {}) {
+      const text = (raw || '').trim();
+      if (!text || state.isSending) return;
+      addMessage('user', text);
+      state.lastQuery = text;
+      els.messageInput.value = '';
+      autosizeTextarea();
+      setComposerBusy(true);
+
+      try {
+        await streamReply(text);
+      } catch (error) {
+        hideTyping();
+        addMessage('assistant', error.message || 'Something went wrong. Please try again.', {
+          error: true,
+          query: text
+        });
+        if (error.message && error.message.toLowerCase().includes('api key')) {
+          openSettings(true);
+          setSettingsStatus(error.message, '#ffd2d2');
+        }
+      } finally {
+        setComposerBusy(false);
+      }
+    }
+
+    async function saveSettings() {
+      state.apiKey = els.apiKeyInput.value.trim();
+      localStorage.setItem(STORAGE.apiKey, state.apiKey);
+      setSettingsStatus('Saved. Checking connection…');
+      try {
+        const response = await fetch('/memory', { headers: headers(false) });
+        if (response.ok) {
+          setSettingsStatus('Connection looks good.', '#c8f0cf');
+          if (!state.threadId && els.onboarding.classList.contains('hidden')) {
+            await startConversation(state.profile || undefined);
+          }
+        } else {
+          setSettingsStatus(`Saved, but the backend returned ${response.status}.`, '#ffd2d2');
+        }
+      } catch {
+        setSettingsStatus('Saved locally. The backend is not reachable right now.', '#ffd2d2');
+      }
+    }
+
+    function bindEvents() {
+      els.settingsToggle.addEventListener('click', toggleSettings);
+      els.saveSettings.addEventListener('click', saveSettings);
+      els.clearSession.addEventListener('click', clearSession);
+      els.sendButton.addEventListener('click', () => sendMessage(els.messageInput.value));
+      els.messageInput.addEventListener('input', autosizeTextarea);
+      els.messageInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault();
+          sendMessage(els.messageInput.value);
+        }
+      });
+
+      els.onboardingNext.addEventListener('click', handleOnboardingNext);
+      els.onboardingBack.addEventListener('click', () => {
+        if (state.onboardingStep === 0) return;
+        setOnboardingValue(getOnboardingValue());
+        state.onboardingStep -= 1;
+        updateOnboardingUI();
+      });
+      els.onboardingSkip.addEventListener('click', () => finishOnboarding(true));
+      els.onboardingInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          handleOnboardingNext();
+        }
+      });
+    }
+
+    async function boot() {
+      state.apiKey = localStorage.getItem(STORAGE.apiKey) || '';
+      state.userId = getOrCreateUserId();
+      state.profile = loadJSON(localStorage, STORAGE.profile);
+      if (state.profile && !state.profile.userId) state.profile.userId = state.userId;
+      state.threadId = sessionStorage.getItem(STORAGE.thread);
+      state.messages = loadJSON(sessionStorage, STORAGE.messages) || [];
+      updateSettingsUI();
+      autosizeTextarea();
+      bindEvents();
+      renderStoredMessages();
+      await fetchHealth();
+      setMode('stub-local');
+
+      if (!state.apiKey) {
+        openSettings(true);
+        setSettingsStatus('Add an API key if your backend requires one.', 'rgba(255,255,255,0.78)');
+      }
+
+      if (state.profile) {
+        els.onboarding.classList.add('hidden');
+        if (!state.threadId) {
+          try {
+            await startConversation(state.profile);
+          } catch (error) {
+            addMessage('assistant', error.message || 'I couldn’t start the conversation yet.', { error: true });
           }
         }
-        else setStatus('Invalid key (' + r.status + ')', 'crimson');
-      } catch (e) {
-        setStatus('Validation failed', 'crimson');
-      }
-    }
-    function updateKeyUi() {
-      const k = getApiKey();
-      apiKeyInput.value = k;
-      if (k) validateKey(); else setStatus('No key saved', '#555');
-    }
-    updateKeyUi();
-  // Remember voice preset
-  function getPreset() { return localStorage.getItem('voicePreset') || 'v2/en_speaker_6'; }
-  function setPreset(v) { localStorage.setItem('voicePreset', v); }
-  presetSel.value = getPreset();
-  speakerWavInput.value = localStorage.getItem('speakerWav') || '';
-  speakerWavInput.addEventListener('change', () => localStorage.setItem('speakerWav', speakerWavInput.value.trim()));
-  presetSel.addEventListener('change', () => setPreset(presetSel.value));
-    // Detect voice configuration from server health and disable voice button if unavailable
-    (async function initVoiceAvailability() {
-      try {
-        const r = await fetch('/health');
-        const j = await r.json();
-        if (!j.voiceConfigured) {
-          voiceBtn.disabled = true;
-          voiceBtn.title = 'Voice not configured';
-        }
-      } catch {}
-    })();
-    saveKeyBtn.onclick = async () => { setApiKey(apiKeyInput.value.trim()); await validateKey(); };
-    apiKeyInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveKeyBtn.click(); });
-
-    function addBubble(text, role, opts) {
-      const div = document.createElement('div');
-      div.className = 'bubble ' + role;
-      div.textContent = text;
-      if (role === 'assistant' && opts && opts.offline) {
-        const btn = document.createElement('button');
-        btn.className = 'retry-btn';
-        btn.textContent = 'Retry';
-        btn.onclick = retryLast;
-        div.appendChild(btn);
-      }
-      chat.appendChild(div);
-      window.scrollTo(0, document.body.scrollHeight);
-    }
-
-    async function ensureThread() {
-      if (threadId) return threadId;
-      const r = await fetch('/conversation/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': getApiKey() },
-        body: JSON.stringify({ userId: getUserId() || undefined })
-      });
-      const j = await r.json();
-      threadId = j.id;
-      if (j.openingMessage) {
-        addBubble(j.openingMessage, 'assistant');
-      }
-      return threadId;
-    }
-
-    function setLive(isLive) {
-      statusBadge.textContent = isLive ? 'Live' : 'Offline';
-      statusBadge.classList.toggle('live', isLive);
-      statusBadge.classList.toggle('offline', !isLive);
-    }
-
-    async function send() {
-      const text = q.value.trim(); if (!text) return;
-      q.value = '';
-      addBubble(text, 'user');
-      lastQueryText = text;
-      await ensureThread();
-      const r = await fetch(`/conversation/${threadId}/send`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': getApiKey() },
-        body: JSON.stringify({ query: text, temperature: 0.8 })
-      });
-      const j = await r.json();
-      if (j.userId && !getUserId()) setUserId(j.userId);
-      addBubble(j.answer || '[no answer]', 'assistant', { offline: !j.model || j.model === 'stub-local' });
-      setLive(j.model && j.model !== 'stub-local');
-    }
-
-    async function retryLast() {
-      if (!lastQueryText) { return; }
-      await ensureThread();
-      const r = await fetch(`/conversation/${threadId}/send`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': getApiKey() },
-        body: JSON.stringify({ query: lastQueryText, temperature: 0.8 })
-      });
-      const j = await r.json();
-      if (j.userId && !getUserId()) setUserId(j.userId);
-      addBubble(j.answer || '[no answer]', 'assistant', { offline: !j.model || j.model === 'stub-local' });
-      setLive(j.model && j.model !== 'stub-local');
-    }
-
-    function setVoiceBusy(busy) {
-      voiceBtn.disabled = busy || voiceBtn.disabled; // keep disabled if config disabled
-      voiceBtn.textContent = busy ? 'Voice…' : 'Voice';
-    }
-
-    async function playBlob(blob) {
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio();
-      audio.src = url;
-      try {
-        await audio.play();
-      } catch (e) {
-        alert('Playback failed. Check your device volume and silent switch.');
-        console.error('audio.play failed', e);
+      } else {
+        updateOnboardingUI();
       }
     }
 
-    async function testVoice() {
-      if (voiceBtn.disabled) { alert('Voice not configured. Ask your admin to set HUGGINGFACE_API_TOKEN and HF_TTS_MODEL.'); return; }
-      setVoiceBusy(true);
-      try {
-        // For Parler-TTS we rely on server-side prompt from env; for Bark we pass voice_preset
-        const params = {};
-        const r = await fetch('/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-api-key': getApiKey() },
-          body: JSON.stringify({ text: 'Testing voice preset.', format: 'wav', parameters: buildTtsParams(params) })
-        });
-        if (!r.ok) {
-          try { const e = await r.json(); alert(e?.error?.message || 'Voice test failed'); }
-          catch { alert('Voice test failed'); }
-          return;
-        }
-        const blob = await r.blob();
-        await playBlob(blob);
-      } finally {
-        setVoiceBusy(false);
-      }
-    }
-
-    async function voice() {
-      if (voiceBtn.disabled) { alert('Voice not configured. Ask your admin to set HUGGINGFACE_API_TOKEN and HF_TTS_MODEL.'); return; }
-      const text = q.value.trim(); if (!text) return;
-      q.value = '';
-      addBubble(text, 'user');
-      setVoiceBusy(true);
-      try {
-        const params = {};
-        const r = await fetch('/generate/voice', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-api-key': getApiKey() },
-          body: JSON.stringify({ query: text, userId: getUserId() || undefined, temperature: 0.8, format: 'wav', parameters: buildTtsParams(params) })
-        });
-        if (!r.ok) {
-          try { const e = await r.json(); alert(e?.error?.message || 'Voice request failed'); }
-          catch { alert('Voice request failed'); }
-          return;
-        }
-        const blob = await r.blob();
-        await playBlob(blob);
-      } finally {
-        setVoiceBusy(false);
-      }
-    }
-
-    sendBtn.onclick = send;
-    voiceBtn.onclick = voice;
-  testVoiceBtn.onclick = testVoice;
-
-    function buildTtsParams(base) {
-      const p = { ...(base || {}) };
-      const wav = (speakerWavInput.value || '').trim();
-      if (wav) {
-        // Reject non-http(s) schemes like vscode-file:// which won't be reachable by Hugging Face
-        const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(wav);
-        if (hasScheme && !(wav.startsWith('http://') || wav.startsWith('https://'))) {
-          alert('Invalid speaker_wav. Please use a public http(s) URL, a path like /voices/John.wav, or just the filename in /voices.');
-        } else if (wav.startsWith('http://') || wav.startsWith('https://')) {
-          p.speaker_wav = wav;
-        } else if (wav.startsWith('/')) {
-          p.speaker_wav = location.origin + wav;
-        } else {
-          // Assume a filename placed under /voices
-          p.speaker_wav = location.origin + '/voices/' + wav;
-        }
-      }
-      p.language = 'en';
-      return p;
-    }
-  q.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
-  startBtn.onclick = () => { q.focus(); window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }); };
-
-  // Initialize and save profile
-  function initProfileUi(){
-    userIdInput.value = getUserId() || '';
-    firstNameInput.value = localStorage.getItem('firstName') || '';
-    regionNameInput.value = localStorage.getItem('regionName') || '';
-  }
-  initProfileUi();
-  saveProfileBtn.onclick = async () => {
-    const userId = (userIdInput.value || '').trim();
-    if (!userId) { profileMsg('Please set a User ID', 'crimson'); return; }
-    setUserId(userId);
-    const firstName = (firstNameInput.value || '').trim();
-    const regionName = (regionNameInput.value || '').trim();
-    localStorage.setItem('firstName', firstName);
-    localStorage.setItem('regionName', regionName);
-    try {
-      // Try geolocation for lat/lon (optional)
-      let coords = null;
-      try {
-        coords = await new Promise((resolve, reject) => {
-          if (!navigator.geolocation) return resolve(null);
-          navigator.geolocation.getCurrentPosition((pos) => resolve(pos.coords), () => resolve(null), { enableHighAccuracy: false, timeout: 3000 });
-        });
-      } catch {}
-      const body = {
-        userId,
-        firstName: firstName || undefined,
-        regionName: regionName || undefined,
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        locale: navigator.language,
-        latitude: coords?.latitude,
-        longitude: coords?.longitude
-      };
-      const r = await fetch('/profile', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': getApiKey() }, body: JSON.stringify(body) });
-      if (r.ok) profileMsg('Profile saved', 'green'); else profileMsg('Failed to save profile', 'crimson');
-    } catch { profileMsg('Failed to save profile', 'crimson'); }
-  };
+    boot();
   </script>
 </body>
 </html>
