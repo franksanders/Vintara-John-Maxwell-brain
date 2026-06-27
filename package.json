@@ -11,8 +11,9 @@
     "test": "jest --runInBand",
     "test:watch": "jest --watch",
     "eval:retrieval": "ts-node src/eval/eval_retrieval.ts",
-     "eval:compare-dims": "ts-node src/eval/compare_dims.ts",
-    "eval:tune": "ts-node src/eval/tune_params.ts"
+    "eval:compare-dims": "ts-node src/eval/compare_dims.ts",
+    "eval:tune": "ts-node src/eval/tune_params.ts",
+    "ingest:transcripts": "ts-node scripts/bulk_ingest_transcripts.ts data/transcripts http://localhost:3000"
   },
   "dependencies": {
     "axios": "^1.7.7",
