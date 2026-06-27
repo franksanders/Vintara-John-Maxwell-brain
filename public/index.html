@@ -739,6 +739,10 @@
           </div>
           <div id="settingsStatus" class="settings-status" aria-live="polite"></div>
         </div>
+        <hr style="border:none;border-top:1px solid rgba(255,255,255,0.12);margin:20px 0;" />
+        <p class="settings-note" style="margin-bottom:8px;"><strong style="color:#c9a84c;">Voice (Text-to-Speech)</strong></p>
+        <p class="settings-note" id="voiceStatusNote">Voice is not configured on this server. To enable Maxwell's voice, set <code>HUGGINGFACE_API_TOKEN</code> and <code>HF_TTS_MODEL=parler-tts/parler-tts-large-v1</code> in your <code>.env</code> file, then restart the server.</p>
+        <p class="settings-note" id="voiceReadyNote" style="display:none;color:#a8d5b5;">Voice is configured. Each response includes a 🔊 button to hear it read aloud.</p>
       </div>
     </section>
 
@@ -1145,6 +1149,13 @@
         state.voiceConfigured = false;
       }
       refreshSpeakerButtons();
+      // Update settings panel voice notes
+      const noteOff = document.getElementById('voiceStatusNote');
+      const noteOn = document.getElementById('voiceReadyNote');
+      if (noteOff && noteOn) {
+        noteOff.style.display = state.voiceConfigured ? 'none' : '';
+        noteOn.style.display = state.voiceConfigured ? '' : 'none';
+      }
     }
 
     async function saveProfile(profile) {
