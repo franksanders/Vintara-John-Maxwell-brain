@@ -86,11 +86,25 @@ Build and run the production image with:
 docker compose --profile prod up --build app-prod
 ```
 
-On macOS with Podman `5.8.2` and the `applehv` machine provider, `podman machine start` can report success while the next Podman command cannot connect. If that happens, run the start and compose command together:
+### If the Podman VM won't start (macOS / applehv)
 
-```sh
-podman machine start podman-machine-default && podman compose up --build
+If `podman machine start` hangs or reports success but `podman` commands
+return "connection refused", the VM hit a first-boot Ignition failure and
+dropped into emergency mode — NOT a panic, NOT a version-specific bug, and no
+"start + compose" command can work around it. Hard reset by deleting the
+machine AND its cached image so a fresh one is pulled:
+
+```bash
+podman machine rm -f podman-machine-default
+rm -rf ~/.config/containers/podman/machine/applehv
+rm -rf ~/.local/share/containers/podman/machine/applehv
+podman machine init --cpus 4 --memory 8192 --disk-size 100
+podman machine start
 ```
+
+A real reset prints "Getting image source signatures" / "Copying blob" during
+`init`; if not, it reused the cache and didn't truly reset. Verify with
+`podman info`.
 
 The Compose stack exposes:
 
