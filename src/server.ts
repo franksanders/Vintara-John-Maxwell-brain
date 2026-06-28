@@ -9,18 +9,19 @@ import { fetchWebPage, ingestText, ingestPdf, ingestTranscript } from './ingest'
 import { toChunks } from './parse';
 import { indexChunks, search, searchDetailed, getIndexStats } from './retrieve';
 import { LRUCache, makeRetrievalKey } from './cache';
-import { buildPrompt, detectEmotionalSignal } from './prompt';
+import { buildPrompt } from './prompt';
 import { dedupStats } from './dedup';
 import { generateAnswer, generateChatAnswer, streamAnswer, streamChatAnswer, ChatMessage } from './generate';
 import { getMemory, upsertMemory, listMemories, recordFeedback, decayPreferences } from './memory';
 import { listConfigHistory, currentRuntimeConfig, updateRuntimeConfig } from './admin_config';
-import { createThread, addMessage, getThread, getHistory, listThreads, setThreadUser } from './conversation';
+import { createThread, addMessage, getThread, getHistory, listThreads, setThreadUser, setCoachingSummary, getCoachingSummary } from './conversation';
 import { synthesizeSpeech } from './voice';
 import { getDateTime, getWeather } from './context';
-import { getRelevantPersonaSnippet, getRelevantPersonaSnippets } from './persona';
+import { getRelevantPersonaSnippet } from './persona';
 import { UserProfile } from './types';
 import fs from 'fs';
 import { checkRateLimit, remainingTokens } from './rate_limit';
+import { upsertProfile, getProfile as getDbProfile, saveCoachingSummary, getRecentCoachingSummaries, addGoal, getActiveGoals, updateGoalStatus, needsGoalCheckIn, trackEvent, getAnalyticsSummary, saveRating } from './db';
 
 const app = express();
 // CORS for frontend apps
@@ -115,115 +116,182 @@ app.get('/corpus/stats', (_req: Request, res: Response) => {
 // --- Simple in-memory user profiles ---
 const profiles = new Map<string, UserProfile>();
 
+function normalizeProfile(input: any, fallbackUserId?: string): UserProfile | undefined {
+  const resolvedUserId = input?.userId ? String(input.userId) : fallbackUserId;
+  if (!resolvedUserId) return undefined;
+  return {
+    userId: resolvedUserId,
+    firstName: input?.firstName ? String(input.firstName) : undefined,
+    timezone: input?.timezone ? String(input.timezone) : undefined,
+    latitude: typeof input?.latitude === 'number' ? input.latitude : (input?.latitude ? Number(input.latitude) : undefined),
+    longitude: typeof input?.longitude === 'number' ? input.longitude : (input?.longitude ? Number(input.longitude) : undefined),
+    locale: input?.locale ? String(input.locale) : undefined,
+    regionName: input?.regionName ? String(input.regionName) : undefined,
+    role: input?.role ? String(input.role) : undefined,
+    seniority: input?.seniority ? String(input.seniority) : undefined,
+    industry: input?.industry ? String(input.industry) : undefined,
+    teamSize: typeof input?.teamSize === 'number' ? input.teamSize : (input?.teamSize ? Number(input.teamSize) : undefined),
+    goals: Array.isArray(input?.goals) ? input.goals.map((g: any) => String(g)).slice(0, 10) : undefined,
+    currentChallenge: input?.currentChallenge ? String(input.currentChallenge) : undefined,
+    tonePref: input?.tonePref === 'direct' || input?.tonePref === 'empathetic' ? input.tonePref : undefined,
+    brevityPref: input?.brevityPref === 'short' || input?.brevityPref === 'normal' ? input.brevityPref : undefined,
+    cadencePref: input?.cadencePref ? String(input.cadencePref) : undefined,
+    stakeholders: Array.isArray(input?.stakeholders) ? input.stakeholders.map((s: any) => String(s)).slice(0, 10) : undefined,
+    deadlines: Array.isArray(input?.deadlines)
+      ? input.deadlines
+          .slice(0, 10)
+          .map((d: any) => ({ name: String(d?.name || ''), date: String(d?.date || '') }))
+          .filter((d: { name: string; date: string }) => d.name && d.date)
+      : undefined,
+    boundaries: Array.isArray(input?.boundaries) ? input.boundaries.map((b: any) => String(b)).slice(0, 10) : undefined
+  };
+}
+
+function buildOpeningMessage(profile?: UserProfile, recentSummaries?: string[]): string {
+  const isReturning = recentSummaries && recentSummaries.length > 0;
+  if (isReturning && profile?.firstName) {
+    return `Welcome back, ${profile.firstName}. Last time we talked, ${recentSummaries[0]} I've been thinking about that. Where are you now with it?`;
+  }
+  if (profile?.firstName && profile.currentChallenge) {
+    return `${profile.firstName}, welcome. I've been thinking about leaders who face ${profile.currentChallenge}. Let me ask you — what would it mean to you personally if you made a real breakthrough there?`;
+  }
+  if (profile?.firstName) {
+    return `${profile.firstName}, I'm glad you're here. I'm John Maxwell. Before we dive in — what's the one area of your leadership you most want to grow in right now?`;
+  }
+  return "I'm glad you're here. I'm John Maxwell — I've spent over 50 years studying and teaching leadership. Before we dive in, I want to make this personal. What's your first name?";
+}
+
+function maybeRefreshCoachingSummary(id: string, userTurnCount: number): void {
+  if (userTurnCount <= 0 || userTurnCount % 5 !== 0) return;
+  void (async () => {
+    try {
+      const history = getHistory(id, 10);
+      const summaryPrompt = `Summarize this coaching session in 2-3 sentences. Focus on: (1) what the person is working on, (2) the main insight or commitment from the conversation so far. Write in third person, past tense. Be specific, not generic. History:\n${history.map(m => `${m.role}: ${m.content}`).join('\n')}`;
+      const result = await generateAnswer({
+        system: 'You summarize coaching conversations with specificity and continuity.',
+        context: summaryPrompt,
+        user: 'Summarize the coaching session.'
+      }, { maxTokens: 120, temperature: 0.4 });
+      setCoachingSummary(id, result.answer);
+      const thread = getThread(id);
+      if (thread?.userId) saveCoachingSummary(thread.userId, id, result.answer, userTurnCount);
+    } catch {}
+  })();
+}
+
 app.get('/profile', (req: Request, res: Response) => {
   const userId = String((req.query.userId || '').toString() || '');
   if (!userId) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Missing userId' } });
-  res.json({ profile: profiles.get(userId) || { userId } });
+  const memProfile = profiles.get(userId);
+  const dbProfile = !memProfile ? getDbProfile(userId) : undefined;
+  if (dbProfile && !memProfile) profiles.set(userId, { ...dbProfile } as UserProfile);
+  res.json({ profile: memProfile || dbProfile || { userId } });
 });
 
 app.post('/profile', (req: Request, res: Response) => {
-  const { userId, firstName, timezone, latitude, longitude, locale, regionName,
-    role, seniority, industry, teamSize, goals, currentChallenge, tonePref, brevityPref, cadencePref, stakeholders, deadlines, boundaries } = req.body || {};
+  const { userId } = req.body || {};
   if (!userId) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Missing userId' } });
-  const p: UserProfile = {
-    userId: String(userId),
-    firstName: firstName ? String(firstName) : undefined,
-    timezone: timezone ? String(timezone) : undefined,
-    latitude: typeof latitude === 'number' ? latitude : (latitude ? Number(latitude) : undefined),
-    longitude: typeof longitude === 'number' ? longitude : (longitude ? Number(longitude) : undefined),
-    locale: locale ? String(locale) : undefined,
-    regionName: regionName ? String(regionName) : undefined,
-    role: role ? String(role) : undefined,
-    seniority: seniority ? String(seniority) : undefined,
-    industry: industry ? String(industry) : undefined,
-    teamSize: typeof teamSize === 'number' ? teamSize : (teamSize ? Number(teamSize) : undefined),
-    goals: Array.isArray(goals) ? goals.map((g: any) => String(g)).slice(0, 10) : undefined,
-    currentChallenge: currentChallenge ? String(currentChallenge) : undefined,
-    tonePref: tonePref === 'direct' || tonePref === 'empathetic' ? tonePref : undefined,
-    brevityPref: brevityPref === 'short' || brevityPref === 'normal' ? brevityPref : undefined,
-    cadencePref: cadencePref ? String(cadencePref) : undefined,
-    stakeholders: Array.isArray(stakeholders) ? stakeholders.map((s: any) => String(s)).slice(0, 10) : undefined,
-    deadlines: Array.isArray(deadlines) ? deadlines.slice(0, 10).map((d: any) => ({ name: String(d?.name || ''), date: String(d?.date || '') })).filter(d => d.name && d.date) : undefined,
-    boundaries: Array.isArray(boundaries) ? boundaries.map((b: any) => String(b)).slice(0, 10) : undefined
-  };
+  const p = normalizeProfile(req.body, String(userId));
+  if (!p) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Missing userId' } });
   profiles.set(p.userId, p);
+  upsertProfile({ userId: p.userId, firstName: p.firstName, role: p.role, industry: p.industry, currentChallenge: p.currentChallenge, goals: p.goals, tonePref: p.tonePref, brevityPref: p.brevityPref });
   res.json({ ok: true, profile: p });
 });
 
-// Helper: build prompt with full user context, session arc, and emotional awareness.
-async function buildPersonalizedPrompt(
-  query: string,
-  results: Array<{ chunk: any; score: number }>,
-  userId?: string,
-  opts: { isFirstMessage?: boolean } = {}
-) {
-  const emotionalSignal = detectEmotionalSignal(query);
-  const prompt = buildPrompt(query, results, { isFirstMessage: opts.isFirstMessage, emotionalSignal });
+app.get('/goals', (req: Request, res: Response) => {
+  const userId = String(req.query.userId || '');
+  if (!userId) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Missing userId' } });
+  res.json({ goals: getActiveGoals(userId) });
+});
 
-  const parts: string[] = [prompt.system];
-  const profile = userId ? profiles.get(userId) : undefined;
+const GoalSchema = z.object({
+  userId: z.string().min(1),
+  title: z.string().min(1).max(200),
+  description: z.string().max(500).optional(),
+  targetDate: z.string().optional()
+});
 
-  if (profile?.firstName) {
-    parts.push(`The person's name is ${profile.firstName}. Use it when it adds genuine warmth -- not more than once or twice per response.`);
+app.post('/goals', (req: Request, res: Response) => {
+  try {
+    const { userId, title, description, targetDate } = GoalSchema.parse(req.body ?? {});
+    const id = addGoal({ userId, title, description, targetDate });
+    res.json({ ok: true, id });
+  } catch (_err) {
+    res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid goal data' } });
   }
+});
 
+app.patch('/goals/:id', (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const { status } = req.body || {};
+  if (!['active', 'achieved', 'paused'].includes(status)) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid status' } });
+  updateGoalStatus(id, status);
+  res.json({ ok: true });
+});
+
+app.get('/admin/analytics', (_req: Request, res: Response) => {
+  res.json(getAnalyticsSummary());
+});
+
+const RatingSchema = z.object({
+  threadId: z.string().min(1),
+  messageIndex: z.number().int().nonnegative(),
+  chunkIds: z.array(z.string()).optional(),
+  helpful: z.boolean()
+});
+
+app.post('/rate', (req: Request, res: Response) => {
+  try {
+    const { threadId, messageIndex, chunkIds, helpful } = RatingSchema.parse(req.body ?? {});
+    const thread = getThread(threadId);
+    saveRating(thread?.userId, threadId, messageIndex, chunkIds || [], helpful);
+    res.json({ ok: true });
+  } catch {
+    res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid rating data' } });
+  }
+});
+
+// Helper: build prompt with personal touch and dynamic context
+async function buildPersonalizedPrompt(query: string, results: Array<{ chunk: any; score: number }>, userId?: string, threadId?: string) {
+  const prompt = buildPrompt(query, results);
+  let nameFrag = '';
+  let contextFrag = '';
+  let personaFrag = '';
+  let profileFrag = '';
+  let summaryFrag = '';
+  const profile = userId ? profiles.get(userId) : undefined;
+  if (profile?.firstName) nameFrag = `Use their first name "${profile.firstName}" when it adds warmth—don’t overuse it.`;
   if (profile) {
     const hints: string[] = [];
-    if (profile.role || profile.seniority) {
-      hints.push(`Role: ${[profile.seniority, profile.role].filter(Boolean).join(' ')}`);
-    }
-    if (profile.industry) hints.push(`Industry: ${profile.industry}`);
-    if (profile.teamSize) hints.push(`Team size: approximately ${profile.teamSize} people`);
-    if (profile.tonePref) hints.push(`Preferred tone: ${profile.tonePref}`);
-    if (profile.brevityPref === 'short') hints.push('Keep responses concise -- they prefer shorter answers.');
-    if (profile.currentChallenge) {
-      hints.push(`Current challenge: "${profile.currentChallenge}" -- connect your advice back to this when relevant.`);
-    }
-    if (profile.goals && profile.goals.length) {
-      hints.push(`Goals: ${profile.goals.slice(0, 3).join('; ')} -- reference these by name when relevant.`);
-    }
-    if (profile.stakeholders && profile.stakeholders.length) {
-      hints.push(`Key stakeholders: ${profile.stakeholders.slice(0, 3).join(', ')}`);
-    }
-    if (profile.deadlines && profile.deadlines.length) {
-      const now = Date.now();
-      const soon = profile.deadlines.filter(d => {
-        const ms = new Date(d.date).getTime();
-        return ms > now && ms - now < 14 * 24 * 60 * 60 * 1000;
-      });
-      if (soon.length) {
-        hints.push(`Upcoming deadlines (within 14 days): ${soon.map(d => `${d.name} on ${d.date}`).join('; ')} -- factor in this urgency.`);
-      }
-    }
-    if (profile.boundaries && profile.boundaries.length) {
-      hints.push(`Topics to avoid: ${profile.boundaries.join(', ')}`);
-    }
-    if (hints.length) {
-      parts.push('Person context (use naturally):\n' + hints.map(h => '  - ' + h).join('\n'));
-    }
+    if (profile.role || profile.seniority) hints.push(`Role: ${[profile.seniority, profile.role].filter(Boolean).join(' ')}`.trim());
+    if (profile.brevityPref) hints.push(`Brevity: ${profile.brevityPref}`);
+    if (profile.tonePref) hints.push(`Tone: ${profile.tonePref}`);
+    if (profile.currentChallenge) hints.push(`Focus: ${profile.currentChallenge}`);
+    // Cap to ~2 lines max
+    if (hints.length) profileFrag = `Profile hints (do not override grounded content): ${hints.slice(0, 3).join('; ')}`;
   }
-
-  if (config.content.personaSnippetsEnabled && config.content.personaPath) {
-    const snips = getRelevantPersonaSnippets(query, config.content.personaPath, 2);
-    if (snips.length) {
-      parts.push('Personal anecdotes you may reference (use at most one, 1-2 sentences, only if genuinely useful):\n' + snips.map(s => '  - ' + s).join('\n'));
-    }
+  const coachingSummary = threadId ? getCoachingSummary(threadId) : undefined;
+  if (coachingSummary) {
+    summaryFrag = `Coaching session summary (for continuity — reference naturally, not verbatim): ${coachingSummary}`;
   }
-
   if (config.context.dateTimeEnabled || config.context.weatherEnabled) {
     const dt = config.context.dateTimeEnabled ? getDateTime(profile) : undefined;
     const weather = config.context.weatherEnabled ? await getWeather(profile) : null;
     const bits: string[] = [];
-    if (dt) bits.push(`Current time: ${dt.local}`);
+    if (dt) bits.push(`Now: ${dt.local} (local time)`);
     if (weather && !Number.isNaN(weather.temperatureC)) {
       const where = profile?.regionName ? ` in ${profile.regionName}` : '';
-      bits.push(`Weather${where}: ${weather.summary}, ${weather.temperatureC.toFixed(1)}C`);
+      bits.push(`Weather${where}: ${weather.summary}, ${weather.temperatureC.toFixed(1)}°C/${weather.temperatureF.toFixed(1)}°F`);
     }
-    if (bits.length) parts.push('Live context (do not use to alter facts of the teachings):\n' + bits.join('\n'));
+    if (bits.length) contextFrag = `\n---\nLive context (do not use to change facts of the teachings):\n${bits.join('\\n')}`;
   }
-
-  const system = parts.filter(Boolean).join('\n\n');
-  return { ...prompt, system };
+  // Add at most one supportive persona snippet when explicitly helpful
+  if (config.content.personaSnippetsEnabled && config.content.personaPath) {
+    const snip = getRelevantPersonaSnippet(query, config.content.personaPath);
+    if (snip) personaFrag = `One brief, relevant personal aside you may reference (optional, keep to 1–2 sentences): ${snip}`;
+  }
+  const system = [prompt.system, nameFrag, profileFrag, summaryFrag, personaFrag, contextFrag].filter(Boolean).join('\n');
+  return { ...prompt, system } as typeof prompt;
 }
 
 const IngestSchema = z.object({
@@ -436,20 +504,25 @@ app.get('/metadata', async (_req: Request, res: Response) => {
 
 // Conversation management endpoints
 app.post('/conversation/start', (req: Request, res: Response) => {
-  const { userId, seed } = req.body || {};
+  const { userId, seed, profile } = req.body || {};
+  // Auto-generate a userId if profile data is provided but no userId given
+  const resolvedUserId = userId ? String(userId)
+    : (profile?.userId ? String(profile.userId)
+    : (profile ? 'u_' + Math.random().toString(36).slice(2, 10) : undefined));
   const initial = Array.isArray(seed) ? seed : [];
-  // Show opening message only for new/anonymous users
-  if (!userId) {
-    const opening: ChatMessage = {
-      role: 'assistant',
-      content: "Hello, I’m John C. Maxwell. It’s good to meet you. I’m here to serve you as a coach—practical, encouraging, and honest. Before we dive in, who am I speaking with? What’s your first name?"
-    };
-    const t = createThread(undefined, [opening, ...initial]);
-    res.json({ id: t.id, openingMessage: opening.content });
-  } else {
-    const t = createThread(userId, initial);
-    res.json({ id: t.id });
-  }
+  const normalizedProfile = normalizeProfile(profile, resolvedUserId);
+  if (normalizedProfile) profiles.set(normalizedProfile.userId, normalizedProfile);
+  const cachedProfile = resolvedUserId ? profiles.get(resolvedUserId) : undefined;
+  const dbProfile = !normalizedProfile && resolvedUserId && !cachedProfile ? getDbProfile(resolvedUserId) : undefined;
+  if (dbProfile && resolvedUserId && !cachedProfile) profiles.set(resolvedUserId, { ...dbProfile } as UserProfile);
+  const openingProfile = normalizedProfile || cachedProfile || (dbProfile ? ({ ...dbProfile } as UserProfile) : undefined);
+  const recentSummaries = resolvedUserId ? getRecentCoachingSummaries(resolvedUserId, 1).map(s => s.summary) : [];
+  const opening: ChatMessage = {
+    role: 'assistant',
+    content: buildOpeningMessage(openingProfile, recentSummaries)
+  };
+  const t = createThread(resolvedUserId, [opening, ...initial]);
+  res.json({ id: t.id, openingMessage: opening.content });
 });
 
 app.get('/conversation', (_req: Request, res: Response) => {
@@ -476,21 +549,21 @@ app.post('/conversation/:id/send', async (req: Request, res: Response, next: Nex
         profiles.set(newUserId, { userId: newUserId, firstName });
       }
     }
-    // Detect first user message for session arc warmup
-    const priorMessages = getHistory(id);
-    const isFirstMessage = priorMessages.filter(m => m.role === 'user').length === 0;
     addMessage(id, { role: 'user', content: userText });
     let results: Array<{ chunk: any; score: number }> = [];
     if (config.content.retrievalEnabled) {
       const { alpha, beta, gamma } = config.retrieval;
+      const mem = t.userId ? getMemory(t.userId) : undefined;
       if (t.userId) decayPreferences(t.userId);
       const detailed = await searchDetailed(query, topK, t.userId, { alpha, beta, gamma });
       results = detailed.map(d => ({ chunk: d.chunk, score: d.score }));
     }
-    const prompt = await buildPersonalizedPrompt(query, results, t.userId, { isFirstMessage });
+  const prompt = await buildPersonalizedPrompt(query, results, t.userId, id);
     const history = getHistory(id);
-    const gen = await generateChatAnswer(prompt, history, { temperature, maxTokens, topP, presencePenalty, frequencyPenalty });
-    addMessage(id, { role: 'assistant', content: gen.answer });
+  const gen = await generateChatAnswer(prompt, history, { temperature, maxTokens, topP, presencePenalty, frequencyPenalty });
+    const updatedThread = addMessage(id, { role: 'assistant', content: gen.answer });
+    trackEvent({ eventType: 'query', userId: t.userId, model: gen.model, chunkIds: results.map(r => r.chunk.id), isStub: gen.model === 'stub-local' });
+    maybeRefreshCoachingSummary(id, updatedThread?.userTurnCount ?? t.userTurnCount);
     // Enrich citations
     const resultsMap = new Map<number, (typeof results)[number]>();
     results.forEach((r: any, idx: number) => resultsMap.set(idx + 1, r));
@@ -526,15 +599,13 @@ app.post('/conversation/:id/stream', async (req: Request, res: Response, next: N
         profiles.set(newUserId, { userId: newUserId, firstName });
       }
     }
-    // Detect first user message for session arc warmup
-    const priorMsgs = getHistory(id);
-    const isFirstMsg = priorMsgs.filter(m => m.role === 'user').length === 0;
     addMessage(id, { role: 'user', content: userText });
     const { alpha, beta, gamma } = config.retrieval;
+    const mem = t.userId ? getMemory(t.userId) : undefined;
     if (t.userId) decayPreferences(t.userId);
     const detailed = await searchDetailed(query, topK, t.userId, { alpha, beta, gamma });
-    const results = detailed.map(d => ({ chunk: d.chunk, score: d.score }));
-    const prompt = await buildPersonalizedPrompt(query, results, t.userId, { isFirstMessage: isFirstMsg });
+  const results = detailed.map(d => ({ chunk: d.chunk, score: d.score }));
+  const prompt = await buildPersonalizedPrompt(query, results, t.userId, id);
     const history = getHistory(id);
     // SSE setup
     res.setHeader('Content-Type', 'text/event-stream');
@@ -574,7 +645,8 @@ app.post('/conversation/:id/stream', async (req: Request, res: Response, next: N
     }
     // After stream, finalize and store assistant message (regenerate once for cache consistency)
   const final = await generateChatAnswer(prompt, history, { temperature, maxTokens, topP, presencePenalty, frequencyPenalty });
-    addMessage(id, { role: 'assistant', content: final.answer });
+    const updatedThread = addMessage(id, { role: 'assistant', content: final.answer });
+    maybeRefreshCoachingSummary(id, updatedThread?.userTurnCount ?? t.userTurnCount);
     res.end();
   } catch (err) { next(err); }
 });
@@ -673,6 +745,80 @@ app.post('/generate/voice', async (req: Request, res: Response, next: NextFuncti
   } catch (err) { next(err); }
 });
 
+app.get('/admin', (_req: Request, res: Response) => {
+  const stats = getIndexStats();
+  const analytics = getAnalyticsSummary() as any;
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Maxwell Brain Admin</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:0;background:#f8f9fa;color:#212529;}
+  header{background:#1a3d2b;color:#fff;padding:16px 24px;display:flex;align-items:center;gap:12px;}
+  header h1{margin:0;font-size:1.2rem;}
+  .gold{color:#c9a84c;}
+  main{max-width:900px;margin:24px auto;padding:0 16px;}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px;}
+  .card{background:#fff;border-radius:8px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08);}
+  .card h3{margin:0 0 8px;font-size:.85rem;text-transform:uppercase;letter-spacing:.05em;color:#6c757d;}
+  .card .value{font-size:2rem;font-weight:700;color:#1a3d2b;}
+  .card .sub{font-size:.8rem;color:#6c757d;margin-top:4px;}
+  table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);}
+  th,td{padding:10px 16px;text-align:left;border-bottom:1px solid #e9ecef;}
+  th{background:#f1f3f5;font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:#6c757d;}
+  tr:last-child td{border-bottom:none;}
+  .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.75rem;font-weight:600;}
+  .badge-green{background:#d3f9d8;color:#1b5e20;}
+  .badge-gray{background:#e9ecef;color:#495057;}
+</style>
+</head>
+<body>
+<header>
+  <span style="font-size:1.5rem;">⚙️</span>
+  <h1>John Maxwell Brain — <span class="gold">Admin</span></h1>
+</header>
+<main>
+  <div class="grid">
+    <div class="card">
+      <h3>Corpus</h3>
+      <div class="value">${stats.chunks}</div>
+      <div class="sub">${stats.docs} documents indexed</div>
+    </div>
+    <div class="card">
+      <h3>Queries (7d)</h3>
+      <div class="value">${analytics.last7days?.queries ?? 0}</div>
+      <div class="sub">Stub fraction: ${analytics.last7days?.stubFraction ?? 'n/a'}</div>
+    </div>
+    <div class="card">
+      <h3>Helpful rate (7d)</h3>
+      <div class="value">${analytics.last7days?.helpfulRate ?? 'n/a'}</div>
+      <div class="sub">Based on user ratings</div>
+    </div>
+    <div class="card">
+      <h3>Users</h3>
+      <div class="value">${analytics.allTime?.users ?? 0}</div>
+      <div class="sub">${analytics.allTime?.activeGoals ?? 0} active goals</div>
+    </div>
+  </div>
+  <h2>Retrieval weights</h2>
+  <p style="color:#6c757d;font-size:.9rem;">Update via <code>POST /admin/config</code> with <code>x-api-key: &lt;ADMIN_API_KEY&gt;</code>. Current: α=${process.env.RETRIEVE_ALPHA || '0.6'} β=${process.env.RETRIEVE_BETA || '0.2'} γ=${process.env.RETRIEVE_GAMMA || '0.1'}</p>
+  <h2>Status</h2>
+  <table>
+    <thead><tr><th>Component</th><th>Status</th><th>Detail</th></tr></thead>
+    <tbody>
+      <tr><td>Vector DB</td><td><span class="badge badge-green">Qdrant</span></td><td>${process.env.QDRANT_URL || 'http://localhost:6333'}</td></tr>
+      <tr><td>Embedding</td><td><span class="badge ${process.env.OPENAI_API_KEY ? 'badge-green' : 'badge-gray'}">${process.env.EMBEDDING_PROVIDER || 'local'}</span></td><td>${process.env.OPENAI_API_KEY ? 'API key configured' : '⚠️ No OPENAI_API_KEY — using stub'}</td></tr>
+      <tr><td>Voice (TTS)</td><td><span class="badge ${process.env.HUGGINGFACE_API_TOKEN ? 'badge-green' : 'badge-gray'}">${process.env.HUGGINGFACE_API_TOKEN ? 'Configured' : 'Not configured'}</span></td><td>${process.env.HF_TTS_MODEL || 'parler-tts/parler-tts-large-v1'}</td></tr>
+    </tbody>
+  </table>
+</main>
+</body>
+</html>`;
+  res.setHeader('Content-Type', 'text/html');
+  res.send(html);
+});
+
 // Error handler
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
@@ -703,26 +849,6 @@ function startServer(port: number, attemptsLeft = 5) {
 
 startServer(config.port);
 
-// Startup check: warn if corpus is empty and transcripts exist
-setTimeout(() => {
-  try {
-    const stats = getIndexStats();
-    if (!stats || stats.chunks === 0) {
-      const transcriptDir = path.join(process.cwd(), 'data/transcripts');
-      if (fs.existsSync(transcriptDir)) {
-        const txFiles = fs.readdirSync(transcriptDir).filter(f => f.endsWith('.txt'));
-        if (txFiles.length > 0) {
-          logger.warn(
-            `⚠️  Vector index is empty but ${txFiles.length} transcripts found in data/transcripts/.` +
-            ' Run: npm run ingest:transcripts -- data/transcripts http://localhost:3000 <api-key>' +
-            ' (or set AUTO_INGEST_DIR=data/transcripts in .env to auto-ingest on startup)'
-          );
-        }
-      }
-    }
-  } catch { /* non-critical */ }
-}, 2000);
-
 // Optional: auto-ingest transcripts from a folder on startup
 // Track auto-ingest progress for visibility
 const autoIngestProgress: {
@@ -748,11 +874,6 @@ const autoIngestProgress: {
     autoIngestProgress.processed = 0;
     autoIngestProgress.failed = 0;
     logger.info({ dir: abs, count: files.length }, 'Auto-ingesting transcripts');
-    // Warn if the vector index is empty but transcripts are available
-    const indexStats = getIndexStats();
-    if (!indexStats || indexStats.chunks === 0) {
-      logger.warn('Vector index is empty. Transcripts will be auto-ingested now. You can also run: npm run ingest:transcripts');
-    }
     for (const f of files) {
       try {
         const txtPath = path.join(abs, f);

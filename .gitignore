@@ -45,6 +45,9 @@ coverage/
 *.pid
 tuning_results.csv
 
+# Cache directory (conversations, embeddings, eval artifacts, SQLite DB)
+.cache/
+
 # Audio assets (keep out of GitHub; use local or LFS)
 public/voices/*.wav
 public/voices/**/*.wav
