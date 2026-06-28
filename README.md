@@ -54,6 +54,51 @@ Navigate to `http://localhost:3000` in your browser. You'll be walked through a 
 
 > **Without `OPENAI_API_KEY`:** The server runs in stub mode with a local hash embedder. Structural features work but answer quality is placeholder text. Set the key for real Maxwell-voiced responses.
 
+### Container quick start
+
+The repository includes a multi-stage Dockerfile and a Compose stack for local development. The default app and test services both use the Dockerfile `dev` stage, run Node inside containers, keep `node_modules` inside the shared image, and use Qdrant as a supporting service.
+
+```sh
+docker compose up --build
+```
+
+Podman users can run the same stack with:
+
+```sh
+podman compose up --build
+```
+
+Run build and tests inside the Node container:
+
+```sh
+docker compose --profile tools run --rm test
+```
+
+Podman:
+
+```sh
+podman compose --profile tools run --rm test
+```
+
+Build and run the production image with:
+
+```sh
+docker compose --profile prod up --build app-prod
+```
+
+On macOS with Podman `5.8.2` and the `applehv` machine provider, `podman machine start` can report success while the next Podman command cannot connect. If that happens, run the start and compose command together:
+
+```sh
+podman machine start podman-machine-default && podman compose up --build
+```
+
+The Compose stack exposes:
+
+- Coaching UI and API: `http://localhost:3000`
+- Qdrant: `http://localhost:6333`
+
+By default, Compose uses `EMBEDDING_PROVIDER=local` so the app can boot without API keys. To use real OpenAI embeddings and generation, copy `.env.example` to `.env`, set `OPENAI_API_KEY`, and set `EMBEDDING_PROVIDER=openai`.
+
 ---
 
 ## Environment variables
