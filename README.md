@@ -54,6 +54,65 @@ Navigate to `http://localhost:3000` in your browser. You'll be walked through a 
 
 > **Without `OPENAI_API_KEY`:** The server runs in stub mode with a local hash embedder. Structural features work but answer quality is placeholder text. Set the key for real Maxwell-voiced responses.
 
+### Container quick start
+
+The repository includes a multi-stage Dockerfile and a Compose stack for local development. The default app and test services both use the Dockerfile `dev` stage, run Node inside containers, keep `node_modules` inside the shared image, and use Qdrant as a supporting service.
+
+```sh
+docker compose up --build
+```
+
+Podman users can run the same stack with:
+
+```sh
+podman compose up --build
+```
+
+Run build and tests inside the Node container:
+
+```sh
+docker compose --profile tools run --rm test
+```
+
+Podman:
+
+```sh
+podman compose --profile tools run --rm test
+```
+
+Build and run the production image with:
+
+```sh
+docker compose --profile prod up --build app-prod
+```
+
+### If the Podman VM won't start (macOS / applehv)
+
+If `podman machine start` hangs or reports success but `podman` commands
+return "connection refused", the VM hit a first-boot Ignition failure and
+dropped into emergency mode — NOT a panic, NOT a version-specific bug, and no
+"start + compose" command can work around it. Hard reset by deleting the
+machine AND its cached image so a fresh one is pulled:
+
+```bash
+podman machine rm -f podman-machine-default
+rm -rf ~/.config/containers/podman/machine/applehv
+rm -rf ~/.local/share/containers/podman/machine/applehv
+podman machine init --cpus 4 --memory 8192 --disk-size 100
+podman machine start
+```
+
+A real reset prints "Getting image source signatures" / "Copying blob" during
+`init`; if not, it reused the cache and didn't truly reset. Verify with
+`podman info`.
+
+The Compose stack exposes:
+
+- Coaching UI and API: `http://localhost:3000`
+- Qdrant: `http://localhost:6333`
+
+By default, Compose uses `EMBEDDING_PROVIDER=local` so the app can boot without API keys. To use real OpenAI embeddings and generation, copy `.env.example` to `.env`, set `OPENAI_API_KEY`, and set `EMBEDDING_PROVIDER=openai`.
+
 ---
 
 ## Environment variables
