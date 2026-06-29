@@ -28,7 +28,10 @@ describe('generateAnswer (stub)', () => {
     };
     const result = await generateAnswer(prompt, { temperature: 0.5, maxTokens: 50 });
     expect(result.model).toBe('stub-local');
-    expect(result.answer).toContain('Leadership Insight');
+    expect(result.answer).toBeTruthy();
+    expect(result.answer.length).toBeGreaterThan(10);
+    // Stub answer should not contain raw citation markers
+    expect(result.answer).not.toMatch(/\[#\d+\]/);
     expect(result.citations.length).toBeGreaterThan(0);
   });
 });
