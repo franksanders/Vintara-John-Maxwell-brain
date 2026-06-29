@@ -377,6 +377,12 @@
       color: #7d8780;
     }
 
+    .message-ratings { display: flex; gap: 6px; margin-top: 6px; opacity: 0.5; transition: opacity 0.2s; }
+    .message-ratings:hover { opacity: 1; }
+    .rate-btn { background: none; border: none; font-size: 1rem; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
+    .rate-btn:hover { background: rgba(0,0,0,0.06); }
+    .rate-btn:disabled { cursor: default; }
+
     .retry-button {
       margin-top: 10px;
       padding: 8px 12px;
@@ -413,6 +419,11 @@
     @keyframes pulse {
       0%, 80%, 100% { transform: scale(0.72); opacity: 0.45; }
       40% { transform: scale(1); opacity: 1; }
+    }
+
+    @keyframes mic-pulse {
+      0%,100% { transform: scale(1); }
+      50% { transform: scale(1.15); }
     }
 
     .date-separator {
@@ -497,6 +508,22 @@
     }
 
     .composer textarea::placeholder { color: #8a948e; }
+
+    .composer-mic {
+      background: none;
+      border: none;
+      font-size: 1.2rem;
+      cursor: pointer;
+      padding: 8px;
+      border-radius: 50%;
+      color: #1a3d2b;
+      opacity: 0.6;
+      transition: opacity 0.2s, background 0.2s;
+      flex-shrink: 0;
+    }
+    .composer-mic:hover { opacity: 1; background: rgba(26,61,43,0.08); }
+    .composer-mic.recording { opacity: 1; color: #c9a84c; animation: mic-pulse 1s ease-in-out infinite; }
+    .composer-mic.unsupported { display: none; }
 
     .composer-send {
       flex: 0 0 auto;
@@ -760,6 +787,7 @@
     <div id="composer" class="composer">
       <div class="composer-inner">
         <textarea id="messageInput" rows="1" placeholder="Share what’s weighing on you, where you feel stuck, or what decision you need to make…" aria-label="Message John Maxwell"></textarea>
+        <button id="micButton" class="composer-mic" type="button" aria-label="Speak to John Maxwell" title="Speak (click to start, click to stop)">🎤</button>
         <button id="sendButton" class="composer-send" type="button">
           <span id="sendLabel">Send</span>
           <span aria-hidden="true">→</span>
@@ -862,6 +890,7 @@
       saveSettings: document.getElementById('saveSettings'),
       clearSession: document.getElementById('clearSession'),
       messageInput: document.getElementById('messageInput'),
+      micButton: document.getElementById('micButton'),
       sendButton: document.getElementById('sendButton'),
       sendLabel: document.getElementById('sendLabel'),
       onboarding: document.getElementById('onboarding'),
@@ -1006,6 +1035,30 @@
       });
     }
 
+    function createRatingControls(message) {
+      const ratingDiv = document.createElement('div');
+      ratingDiv.className = 'message-ratings';
+      ratingDiv.innerHTML = '<button class="rate-btn" data-helpful="true" title="Helpful">👍</button><button class="rate-btn" data-helpful="false" title="Not helpful">👎</button>';
+      const messageIndex = typeof message.messageIndex === 'number' ? message.messageIndex : 0;
+      ratingDiv.querySelectorAll('.rate-btn').forEach((btn) => {
+        btn.addEventListener('click', async function() {
+          const helpful = this.dataset.helpful === 'true';
+          ratingDiv.querySelectorAll('.rate-btn').forEach((button) => {
+            button.disabled = true;
+            button.style.opacity = button === this ? '1' : '0.45';
+          });
+          try {
+            await fetch('/rate', {
+              method: 'POST',
+              headers: headers(),
+              body: JSON.stringify({ threadId: state.threadId, messageIndex, helpful })
+            });
+          } catch {}
+        });
+      });
+      return ratingDiv;
+    }
+
     function appendRetryButton(container, query) {
       const button = document.createElement('button');
       button.className = 'retry-button';
@@ -1043,9 +1096,11 @@
 
       if (message.role === 'assistant') {
         meta.appendChild(createSpeakerButton(message.content));
+        wrap.appendChild(meta);
+        wrap.appendChild(createRatingControls(message));
+      } else {
+        wrap.appendChild(meta);
       }
-
-      wrap.appendChild(meta);
 
       if (message.error && message.query) {
         appendRetryButton(bubble, message.query);
@@ -1058,7 +1113,7 @@
     }
 
     function addMessage(role, content, extra = {}) {
-      const message = { role, content, timestamp: Date.now(), ...extra };
+      const message = { role, content, timestamp: Date.now(), messageIndex: typeof extra.messageIndex === 'number' ? extra.messageIndex : state.messages.length, ...extra };
       state.messages.push(message);
       renderMessage(message);
       persistMessages();
@@ -1108,6 +1163,7 @@
     function setComposerBusy(busy) {
       state.isSending = busy;
       els.messageInput.disabled = busy;
+      if (els.micButton) els.micButton.disabled = busy;
       els.sendButton.disabled = busy;
       els.sendLabel.textContent = busy ? 'Connecting…' : 'Send';
       if (!busy) {
@@ -1358,7 +1414,7 @@
         if (event === 'start') {
           hideTyping();
           currentText = '';
-          currentRender = renderMessage({ role: 'assistant', content: '', timestamp: Date.now() });
+          currentRender = renderMessage({ role: 'assistant', content: '', timestamp: Date.now(), messageIndex: state.messages.length });
           if (data && data.model) setMode(data.model);
           if (data && data.userId && !localStorage.getItem(STORAGE.userId)) {
             localStorage.setItem(STORAGE.userId, data.userId);
@@ -1369,7 +1425,7 @@
         if (event === 'token') {
           if (!currentRender) {
             hideTyping();
-            currentRender = renderMessage({ role: 'assistant', content: '', timestamp: Date.now() });
+            currentRender = renderMessage({ role: 'assistant', content: '', timestamp: Date.now(), messageIndex: state.messages.length });
           }
           currentText += data.token || '';
           currentRender.bubble.textContent = currentText;
@@ -1382,7 +1438,7 @@
         if (event === 'done') {
           doneSeen = true;
           hideTyping();
-          const finalMessage = { role: 'assistant', content: currentText.trim() || ' ', timestamp: Date.now() };
+          const finalMessage = { role: 'assistant', content: currentText.trim() || ' ', timestamp: Date.now(), messageIndex: state.messages.length };
           state.messages.push(finalMessage);
           persistMessages();
           return;
@@ -1409,7 +1465,7 @@
       const tail = buffer.trim();
       if (tail) handleEvent(parseSseBlock(tail));
       if (!doneSeen && currentText) {
-        state.messages.push({ role: 'assistant', content: currentText.trim(), timestamp: Date.now() });
+        state.messages.push({ role: 'assistant', content: currentText.trim(), timestamp: Date.now(), messageIndex: state.messages.length });
         persistMessages();
       }
     }
@@ -1439,6 +1495,68 @@
         setComposerBusy(false);
       }
     }
+
+    // Speech-to-text input
+    (function initSpeech() {
+      const micBtn = document.getElementById('micButton');
+      const msgInput = document.getElementById('messageInput');
+      if (!micBtn || !msgInput) return;
+
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) {
+        micBtn.classList.add('unsupported');
+        return;
+      }
+
+      const recognition = new SR();
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+
+      let isRecording = false;
+      let finalTranscript = '';
+
+      recognition.onstart = () => {
+        isRecording = true;
+        finalTranscript = msgInput.value;
+        micBtn.classList.add('recording');
+        micBtn.title = 'Recording… click to stop';
+      };
+
+      recognition.onresult = (e) => {
+        let interim = '';
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          if (e.results[i].isFinal) finalTranscript += e.results[i][0].transcript;
+          else interim = e.results[i][0].transcript;
+        }
+        msgInput.value = finalTranscript + interim;
+        msgInput.dispatchEvent(new Event('input'));
+      };
+
+      recognition.onend = () => {
+        isRecording = false;
+        micBtn.classList.remove('recording');
+        micBtn.title = 'Speak (click to start, click to stop)';
+        msgInput.value = finalTranscript;
+        msgInput.dispatchEvent(new Event('input'));
+        if (finalTranscript.trim()) msgInput.focus();
+      };
+
+      recognition.onerror = (e) => {
+        isRecording = false;
+        micBtn.classList.remove('recording');
+        if (e.error !== 'no-speech') console.warn('Speech recognition error:', e.error);
+      };
+
+      micBtn.onclick = () => {
+        if (isRecording) {
+          recognition.stop();
+          return;
+        }
+        finalTranscript = msgInput.value;
+        recognition.start();
+      };
+    })();
 
     async function saveSettings() {
       state.apiKey = els.apiKeyInput.value.trim();

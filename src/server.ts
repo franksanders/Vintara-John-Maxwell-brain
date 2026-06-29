@@ -21,6 +21,7 @@ import { getRelevantPersonaSnippet } from './persona';
 import { UserProfile } from './types';
 import fs from 'fs';
 import { checkRateLimit, remainingTokens } from './rate_limit';
+import { upsertProfile, getProfile as getDbProfile, saveCoachingSummary, getRecentCoachingSummaries, addGoal, getActiveGoals, updateGoalStatus, needsGoalCheckIn, trackEvent, getAnalyticsSummary, saveRating } from './db';
 
 const app = express();
 // CORS for frontend apps
@@ -146,7 +147,11 @@ function normalizeProfile(input: any, fallbackUserId?: string): UserProfile | un
   };
 }
 
-function buildOpeningMessage(profile?: UserProfile): string {
+function buildOpeningMessage(profile?: UserProfile, recentSummaries?: string[]): string {
+  const isReturning = recentSummaries && recentSummaries.length > 0;
+  if (isReturning && profile?.firstName) {
+    return `Welcome back, ${profile.firstName}. Last time we talked, ${recentSummaries[0]} I've been thinking about that. Where are you now with it?`;
+  }
   if (profile?.firstName && profile.currentChallenge) {
     return `${profile.firstName}, welcome. I've been thinking about leaders who face ${profile.currentChallenge}. Let me ask you — what would it mean to you personally if you made a real breakthrough there?`;
   }
@@ -168,6 +173,8 @@ function maybeRefreshCoachingSummary(id: string, userTurnCount: number): void {
         user: 'Summarize the coaching session.'
       }, { maxTokens: 120, temperature: 0.4 });
       setCoachingSummary(id, result.answer);
+      const thread = getThread(id);
+      if (thread?.userId) saveCoachingSummary(thread.userId, id, result.answer, userTurnCount);
     } catch {}
   })();
 }
@@ -175,7 +182,10 @@ function maybeRefreshCoachingSummary(id: string, userTurnCount: number): void {
 app.get('/profile', (req: Request, res: Response) => {
   const userId = String((req.query.userId || '').toString() || '');
   if (!userId) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Missing userId' } });
-  res.json({ profile: profiles.get(userId) || { userId } });
+  const memProfile = profiles.get(userId);
+  const dbProfile = !memProfile ? getDbProfile(userId) : undefined;
+  if (dbProfile && !memProfile) profiles.set(userId, { ...dbProfile } as UserProfile);
+  res.json({ profile: memProfile || dbProfile || { userId } });
 });
 
 app.post('/profile', (req: Request, res: Response) => {
@@ -184,7 +194,61 @@ app.post('/profile', (req: Request, res: Response) => {
   const p = normalizeProfile(req.body, String(userId));
   if (!p) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Missing userId' } });
   profiles.set(p.userId, p);
+  upsertProfile({ userId: p.userId, firstName: p.firstName, role: p.role, industry: p.industry, currentChallenge: p.currentChallenge, goals: p.goals, tonePref: p.tonePref, brevityPref: p.brevityPref });
   res.json({ ok: true, profile: p });
+});
+
+app.get('/goals', (req: Request, res: Response) => {
+  const userId = String(req.query.userId || '');
+  if (!userId) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Missing userId' } });
+  res.json({ goals: getActiveGoals(userId) });
+});
+
+const GoalSchema = z.object({
+  userId: z.string().min(1),
+  title: z.string().min(1).max(200),
+  description: z.string().max(500).optional(),
+  targetDate: z.string().optional()
+});
+
+app.post('/goals', (req: Request, res: Response) => {
+  try {
+    const { userId, title, description, targetDate } = GoalSchema.parse(req.body ?? {});
+    const id = addGoal({ userId, title, description, targetDate });
+    res.json({ ok: true, id });
+  } catch (_err) {
+    res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid goal data' } });
+  }
+});
+
+app.patch('/goals/:id', (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const { status } = req.body || {};
+  if (!['active', 'achieved', 'paused'].includes(status)) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid status' } });
+  updateGoalStatus(id, status);
+  res.json({ ok: true });
+});
+
+app.get('/admin/analytics', (_req: Request, res: Response) => {
+  res.json(getAnalyticsSummary());
+});
+
+const RatingSchema = z.object({
+  threadId: z.string().min(1),
+  messageIndex: z.number().int().nonnegative(),
+  chunkIds: z.array(z.string()).optional(),
+  helpful: z.boolean()
+});
+
+app.post('/rate', (req: Request, res: Response) => {
+  try {
+    const { threadId, messageIndex, chunkIds, helpful } = RatingSchema.parse(req.body ?? {});
+    const thread = getThread(threadId);
+    saveRating(thread?.userId, threadId, messageIndex, chunkIds || [], helpful);
+    res.json({ ok: true });
+  } catch {
+    res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid rating data' } });
+  }
 });
 
 // Helper: build prompt with personal touch and dynamic context
@@ -448,10 +512,14 @@ app.post('/conversation/start', (req: Request, res: Response) => {
   const initial = Array.isArray(seed) ? seed : [];
   const normalizedProfile = normalizeProfile(profile, resolvedUserId);
   if (normalizedProfile) profiles.set(normalizedProfile.userId, normalizedProfile);
-  const openingProfile = normalizedProfile || (resolvedUserId ? profiles.get(resolvedUserId) : undefined);
+  const cachedProfile = resolvedUserId ? profiles.get(resolvedUserId) : undefined;
+  const dbProfile = !normalizedProfile && resolvedUserId && !cachedProfile ? getDbProfile(resolvedUserId) : undefined;
+  if (dbProfile && resolvedUserId && !cachedProfile) profiles.set(resolvedUserId, { ...dbProfile } as UserProfile);
+  const openingProfile = normalizedProfile || cachedProfile || (dbProfile ? ({ ...dbProfile } as UserProfile) : undefined);
+  const recentSummaries = resolvedUserId ? getRecentCoachingSummaries(resolvedUserId, 1).map(s => s.summary) : [];
   const opening: ChatMessage = {
     role: 'assistant',
-    content: buildOpeningMessage(openingProfile)
+    content: buildOpeningMessage(openingProfile, recentSummaries)
   };
   const t = createThread(resolvedUserId, [opening, ...initial]);
   res.json({ id: t.id, openingMessage: opening.content });
@@ -494,6 +562,7 @@ app.post('/conversation/:id/send', async (req: Request, res: Response, next: Nex
     const history = getHistory(id);
   const gen = await generateChatAnswer(prompt, history, { temperature, maxTokens, topP, presencePenalty, frequencyPenalty });
     const updatedThread = addMessage(id, { role: 'assistant', content: gen.answer });
+    trackEvent({ eventType: 'query', userId: t.userId, model: gen.model, chunkIds: results.map(r => r.chunk.id), isStub: gen.model === 'stub-local' });
     maybeRefreshCoachingSummary(id, updatedThread?.userTurnCount ?? t.userTurnCount);
     // Enrich citations
     const resultsMap = new Map<number, (typeof results)[number]>();
@@ -674,6 +743,80 @@ app.post('/generate/voice', async (req: Request, res: Response, next: NextFuncti
     res.setHeader('Content-Type', `audio/${format}`);
     res.send(audio);
   } catch (err) { next(err); }
+});
+
+app.get('/admin', (_req: Request, res: Response) => {
+  const stats = getIndexStats();
+  const analytics = getAnalyticsSummary() as any;
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Maxwell Brain Admin</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:0;background:#f8f9fa;color:#212529;}
+  header{background:#1a3d2b;color:#fff;padding:16px 24px;display:flex;align-items:center;gap:12px;}
+  header h1{margin:0;font-size:1.2rem;}
+  .gold{color:#c9a84c;}
+  main{max-width:900px;margin:24px auto;padding:0 16px;}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px;}
+  .card{background:#fff;border-radius:8px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.08);}
+  .card h3{margin:0 0 8px;font-size:.85rem;text-transform:uppercase;letter-spacing:.05em;color:#6c757d;}
+  .card .value{font-size:2rem;font-weight:700;color:#1a3d2b;}
+  .card .sub{font-size:.8rem;color:#6c757d;margin-top:4px;}
+  table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);}
+  th,td{padding:10px 16px;text-align:left;border-bottom:1px solid #e9ecef;}
+  th{background:#f1f3f5;font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:#6c757d;}
+  tr:last-child td{border-bottom:none;}
+  .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.75rem;font-weight:600;}
+  .badge-green{background:#d3f9d8;color:#1b5e20;}
+  .badge-gray{background:#e9ecef;color:#495057;}
+</style>
+</head>
+<body>
+<header>
+  <span style="font-size:1.5rem;">⚙️</span>
+  <h1>John Maxwell Brain — <span class="gold">Admin</span></h1>
+</header>
+<main>
+  <div class="grid">
+    <div class="card">
+      <h3>Corpus</h3>
+      <div class="value">${stats.chunks}</div>
+      <div class="sub">${stats.docs} documents indexed</div>
+    </div>
+    <div class="card">
+      <h3>Queries (7d)</h3>
+      <div class="value">${analytics.last7days?.queries ?? 0}</div>
+      <div class="sub">Stub fraction: ${analytics.last7days?.stubFraction ?? 'n/a'}</div>
+    </div>
+    <div class="card">
+      <h3>Helpful rate (7d)</h3>
+      <div class="value">${analytics.last7days?.helpfulRate ?? 'n/a'}</div>
+      <div class="sub">Based on user ratings</div>
+    </div>
+    <div class="card">
+      <h3>Users</h3>
+      <div class="value">${analytics.allTime?.users ?? 0}</div>
+      <div class="sub">${analytics.allTime?.activeGoals ?? 0} active goals</div>
+    </div>
+  </div>
+  <h2>Retrieval weights</h2>
+  <p style="color:#6c757d;font-size:.9rem;">Update via <code>POST /admin/config</code> with <code>x-api-key: &lt;ADMIN_API_KEY&gt;</code>. Current: α=${process.env.RETRIEVE_ALPHA || '0.6'} β=${process.env.RETRIEVE_BETA || '0.2'} γ=${process.env.RETRIEVE_GAMMA || '0.1'}</p>
+  <h2>Status</h2>
+  <table>
+    <thead><tr><th>Component</th><th>Status</th><th>Detail</th></tr></thead>
+    <tbody>
+      <tr><td>Vector DB</td><td><span class="badge badge-green">Qdrant</span></td><td>${process.env.QDRANT_URL || 'http://localhost:6333'}</td></tr>
+      <tr><td>Embedding</td><td><span class="badge ${process.env.OPENAI_API_KEY ? 'badge-green' : 'badge-gray'}">${process.env.EMBEDDING_PROVIDER || 'local'}</span></td><td>${process.env.OPENAI_API_KEY ? 'API key configured' : '⚠️ No OPENAI_API_KEY — using stub'}</td></tr>
+      <tr><td>Voice (TTS)</td><td><span class="badge ${process.env.HUGGINGFACE_API_TOKEN ? 'badge-green' : 'badge-gray'}">${process.env.HUGGINGFACE_API_TOKEN ? 'Configured' : 'Not configured'}</span></td><td>${process.env.HF_TTS_MODEL || 'parler-tts/parler-tts-large-v1'}</td></tr>
+    </tbody>
+  </table>
+</main>
+</body>
+</html>`;
+  res.setHeader('Content-Type', 'text/html');
+  res.send(html);
 });
 
 // Error handler

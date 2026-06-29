@@ -1,10 +1,15 @@
 .cache
 .env
+.env.*
+!.env.example
 .git
 .gitignore
 coverage
 dist
 node_modules
+*.log
 npm-debug.log*
 Dockerfile
 docker-compose*.yml
+tuning_results.csv
+.ingest_progress.json
