@@ -1,0 +1,11 @@
+node_modules
+.cache
+dist
+*.log
+.env
+.env.*
+!.env.example
+.git
+.gitignore
+tuning_results.csv
+.ingest_progress.json
